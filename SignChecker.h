@@ -4,62 +4,62 @@ extern double balance;
 
 class SignChecker
 {
-	// Колличество простых и DTW проверок
-	int SimpleChecks; 
+	// РљРѕР»Р»РёС‡РµСЃС‚РІРѕ РїСЂРѕСЃС‚С‹С… Рё DTW РїСЂРѕРІРµСЂРѕРє
+	int SimpleChecks;
 	int DTWChecks;
 
-	// окно для построения оптимального пути
+	// РѕРєРЅРѕ РґР»СЏ РїРѕСЃС‚СЂРѕРµРЅРёСЏ РѕРїС‚РёРјР°Р»СЊРЅРѕРіРѕ РїСѓС‚Рё
 	int DTWwindow;
 
-	// результаты проверок
+	// СЂРµР·СѓР»СЊС‚Р°С‚С‹ РїСЂРѕРІРµСЂРѕРє
 	double DTWTestResult;
-	double SimpleTestResult; 
+	double SimpleTestResult;
 
-	// функции простых проверок
+	// С„СѓРЅРєС†РёРё РїСЂРѕСЃС‚С‹С… РїСЂРѕРІРµСЂРѕРє
 	typedef double(*SimpleCheckFunctions)(CTab *ipens, int i);
 	std::unique_ptr <SimpleCheckFunctions[]> mySimpleCheckFunctions;
 
-	// функции DTW проверок
+	// С„СѓРЅРєС†РёРё DTW РїСЂРѕРІРµСЂРѕРє
 	typedef double(*DTWCheckFunctions)(std::vector<double> &x, std::vector<double> &y);
 	std::unique_ptr <DTWCheckFunctions[]> myDTWCheckFunctions;
 
-	// результаты вычисления оптимального пути 
+	// СЂРµР·СѓР»СЊС‚Р°С‚С‹ РІС‹С‡РёСЃР»РµРЅРёСЏ РѕРїС‚РёРјР°Р»СЊРЅРѕРіРѕ РїСѓС‚Рё
 	std::unique_ptr <Matrix<double>[]> DTWch;
 	std::unique_ptr <Matrix<double>[]> DTW;
 
-	// результаты глобальный путь трансформации
+	// СЂРµР·СѓР»СЊС‚Р°С‚С‹ РіР»РѕР±Р°Р»СЊРЅС‹Р№ РїСѓС‚СЊ С‚СЂР°РЅСЃС„РѕСЂРјР°С†РёРё
 	std::unique_ptr <Matrix<double>[]> CGch;
 	std::unique_ptr <Matrix<double>[]> CG;
 
-	// оценки корреляции
+	// РѕС†РµРЅРєРё РєРѕСЂСЂРµР»СЏС†РёРё
 	std::unique_ptr <Matrix<double>[]> CVch;
 
-	// колличество точек в глобальном пути трансформации
+	// РєРѕР»Р»РёС‡РµСЃС‚РІРѕ С‚РѕС‡РµРє РІ РіР»РѕР±Р°Р»СЊРЅРѕРј РїСѓС‚Рё С‚СЂР°РЅСЃС„РѕСЂРјР°С†РёРё
 	std::unique_ptr <Matrix<int>[]> Ncg;
 
-	// результаты простых проверок
+	// СЂРµР·СѓР»СЊС‚Р°С‚С‹ РїСЂРѕСЃС‚С‹С… РїСЂРѕРІРµСЂРѕРє
 	std::unique_ptr <Matrix<double>[]> SimpleM;
 	std::unique_ptr <Matrix<double>[]> SimpleMch;
 
 public:
 	SignChecker();
-	
-	inline double GetTestResult() 
+
+	inline double GetTestResult()
 	{
 		return balance * this->SimpleTestResult + (1.0 - balance)*this->DTWTestResult;
 	}
-	
-	// Инициализация проверок
+
+	// РРЅРёС†РёР°Р»РёР·Р°С†РёСЏ РїСЂРѕРІРµСЂРѕРє
 	bool SimpleCheckForRandomForge(CTab *ipens, int npens);
 	bool DTWCheckForSimpleForge(DPoints* dpens, SPoints* spens, int npen);
-	
-	//оценка близости подписи
+
+	//РѕС†РµРЅРєР° Р±Р»РёР·РѕСЃС‚Рё РїРѕРґРїРёСЃРё
 	double CalcDifference(Matrix<double>& ratioM_withCheckedSign, Matrix<double>& ratioM_withoutCheckedSign, int npens);
 	double DTWCalcDifference(int ncheck, int npens);
 
 	void GenerateMatixeByIPen(int icheck, CTab *ipens, int npens);
 	void GenerateMatrixByDPen(int icheck, DPoints* dpens, SPoints *spens, int npens);
-	
+
 	void DTW_Go(int icheck, DPoints* dpens, SPoints *spens, int i, int j);
 	bool DTW_InitMatrix(int icheck, Matrix<double>& d, DPoints& dpeni, SPoints& speni, DPoints& dpenj, SPoints& spenj);
 	void DTW_TraceBack(Matrix<double>& D, SPoints& tranformpeni, SPoints& tranformpenj);

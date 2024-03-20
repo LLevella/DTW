@@ -1,16 +1,16 @@
 #pragma once
 
-// шаблон матрицы
+// С€Р°Р±Р»РѕРЅ РјР°С‚СЂРёС†С‹
 
 template <class TypeVect> class Matrix
 {
 protected:
 
-	int N; // колличесвто строк
-	int M; // колличество столбцов
-	
+	int N; // РєРѕР»Р»РёС‡РµСЃРІС‚Рѕ СЃС‚СЂРѕРє
+	int M; // РєРѕР»Р»РёС‡РµСЃС‚РІРѕ СЃС‚РѕР»Р±С†РѕРІ
+
 	TypeVect** A;
-	
+
 public:
 
 	Matrix() {};
@@ -24,7 +24,7 @@ public:
 			delete[] this->A[i];
 		delete[] A;
 	}
-	
+
 	void Init(int n, int m)
 	{
 		this->N = n;
@@ -41,7 +41,7 @@ public:
 	{
 		this->N = Ldef.GetN() - std::min(Ldef.GetN(), abs(defi));
 		this->M = Ldef.GetM() - std::min(Ldef.GetM(), abs(defj));
-		
+
 		if (this->N == 1)
 			this->N = Ldef.GetN();
 		if (this->M == 1)
@@ -55,7 +55,7 @@ public:
 			for (int j = 0; j < this->M; j++)
 				this->A[i][j] = Ldef(i, j);
 	}
-	
+
 	inline int GetN()
 	{
 		return N;
@@ -64,7 +64,7 @@ public:
 	{
 		return M;
 	}
-	
+
 	inline TypeVect &operator() (int i, int j)
 	{
 		return this->A[i][j];
@@ -72,8 +72,8 @@ public:
 	inline void SetElem(int i, int j, TypeVect x) {
 		this->A[i][j] = x;
 	}
-	
-	// вычисление средних по строке, по столбцам, и в целом по матрице 
+
+	// РІС‹С‡РёСЃР»РµРЅРёРµ СЃСЂРµРґРЅРёС… РїРѕ СЃС‚СЂРѕРєРµ, РїРѕ СЃС‚РѕР»Р±С†Р°Рј, Рё РІ С†РµР»РѕРј РїРѕ РјР°С‚СЂРёС†Рµ
 	TypeVect AvgByJ(int j)
 	{
 		double sum = 0.0;
@@ -91,7 +91,7 @@ public:
         {
             sum += this->A[i][j];
         }
-                
+
         return sum / double(this->M);
     }
     TypeVect AvgAll()
@@ -100,11 +100,11 @@ public:
         for (int i = 0; i < this->N; i++)
             for (int j = 0; j < this->M; j++)
                 sum += this->A[i][j];
-    
+
         return sum / double(this->M * this->N);
     }
 
-	// вычисление оценки среднеквадратичного отклонения 
+	// РІС‹С‡РёСЃР»РµРЅРёРµ РѕС†РµРЅРєРё СЃСЂРµРґРЅРµРєРІР°РґСЂР°С‚РёС‡РЅРѕРіРѕ РѕС‚РєР»РѕРЅРµРЅРёСЏ
 	TypeVect SumSqByI(int i, TypeVect a)
 	{
 		double sum = 0.0;
@@ -142,7 +142,7 @@ public:
 		return maxel;
 	}
 
-	// индекс минимального/максимального элемента в сечениях по столбцам или строкам
+	// РёРЅРґРµРєСЃ РјРёРЅРёРјР°Р»СЊРЅРѕРіРѕ/РјР°РєСЃРёРјР°Р»СЊРЅРѕРіРѕ СЌР»РµРјРµРЅС‚Р° РІ СЃРµС‡РµРЅРёСЏС… РїРѕ СЃС‚РѕР»Р±С†Р°Рј РёР»Рё СЃС‚СЂРѕРєР°Рј
 	int GetJMinElInI(int i)
 	{
 		int jmin = 0;

@@ -16,7 +16,7 @@ SignChecker::SignChecker()
 	this->DTWTestResult = 0.0;
 
 	this->mySimpleCheckFunctions = std::unique_ptr<SimpleCheckFunctions[]>(new SimpleCheckFunctions[SimpleChecks]);
-	
+
 	mySimpleCheckFunctions[0] = &RatioXY;
 	mySimpleCheckFunctions[1] = &AvgXY;
 	mySimpleCheckFunctions[2] = &SinXY;
@@ -26,7 +26,7 @@ SignChecker::SignChecker()
 	this->SimpleMch = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->SimpleChecks]);
 
 	this->myDTWCheckFunctions = std::unique_ptr<DTWCheckFunctions[]>(new DTWCheckFunctions[DTWChecks]);
-	
+
 	myDTWCheckFunctions[0] = &CityBlockMetric;
 	//myDTWCheckFunctions[1] = &EuclideMetric;
 	myDTWCheckFunctions[2] = &VelocityMetric;
@@ -34,12 +34,12 @@ SignChecker::SignChecker()
 
 	this->DTWch = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->DTWChecks]);
 	this->DTW = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->DTWChecks]);
-	
+
 	this->CGch = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->DTWChecks]);
 	this->CG = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->DTWChecks]);
-	
+
 	this->CVch = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->DTWChecks]);
-	
+
 	this->Ncg = std::unique_ptr<Matrix<int>[]>(new Matrix<int>[this->DTWChecks]);
 }
 
@@ -97,9 +97,9 @@ double SignChecker::CalcDifference( Matrix<double>& ratioM_withCheckedSign, Matr
 	int imax = 0;
 	int jmax = 0;
 	double elmaxch, elavgch, elavg, ratval;
-	
+
 	elmaxch = ratioM_withCheckedSign.GetIndMaxElem(imax, jmax);
-	
+
 	elavgch = ratioM_withCheckedSign.AvgByI(npens - 1);
 	elavg = ratioM_withoutCheckedSign.AvgAll();
 
@@ -130,7 +130,7 @@ double SignChecker::DTWCalcDifference(int icheck, int npens)
 	double DTWavg = this->DTW[icheck].AvgByI(jCVcheckmax);
 	double sigma = sqrt(this->DTW[icheck].SumSqByI(jCVcheckmax, DTWavg));
 	double sigmacheck = abs(this->DTWch[icheck](npens - 1, jCVcheckmax) - DTWavg);
-	
+
 	if ((sigma == 0) && (sigmacheck == 0))
 		ratval = 0;
 	else
@@ -163,12 +163,12 @@ void SignChecker::DTW_Go(int icheck, DPoints* dpens, SPoints *spens, int i, int 
 	Matrix<double> D(Ni, Nj);
 	SPoints TPeni, TPenj;
 
-	if (this->DTW_InitMatrix(icheck, D, dpens[i], spens[i], dpens[j], spens[j])) 
+	if (this->DTW_InitMatrix(icheck, D, dpens[i], spens[i], dpens[j], spens[j]))
 	{
 		this->DTW_TraceBack(D, TPeni, TPenj);
 		this->DTWch[icheck].SetElem(i, j, D(Ni - 1, Nj - 1));
 		this->DTWch[icheck].SetElem(j, i, D(Ni - 1, Nj - 1));
-		
+
 		Nt = TPeni.GetN();
 		this->Ncg[icheck].SetElem(i, j, Nt);
 		this->Ncg[icheck].SetElem(j, i, Nt);
@@ -202,7 +202,7 @@ bool SignChecker::DTW_InitMatrix(int icheck, Matrix<double>& D, DPoints& dpeni, 
 	xpars[3] = dpenj.GetX(spenj[0]);
 	ypars[1] = dpenj.GetY(spenj[0]);
 	ypars[3] = dpenj.GetY(spenj[0]);
-	
+
 	Dij = (*myDTWCheckFunctions[icheck])(xpars, ypars);
 	D.SetElem(0, 0, Dij);
 
@@ -238,7 +238,7 @@ bool SignChecker::DTW_InitMatrix(int icheck, Matrix<double>& D, DPoints& dpeni, 
 	}
 
 	for (int i = 1; i < Ni; i++)
-	{ 
+	{
 		xpars[0] = dpeni.GetX(speni[i]);
 		xpars[2] = dpeni.GetX(speni[i - 1]);
 		ypars[0] = dpeni.GetY(speni[i]);
@@ -416,7 +416,7 @@ double SignChecker::DTW_CalcDetermination(SPoints& tpeni, DPoints& dpeni, SPoint
 	double sumj = 0;
 	double sumsqx = 0;
 	double sumsqy = 0;
-	
+
 	for (int i = 0; i < N; i++)
 	{
 		xi = dpeni.GetX(tpeni[i]);
