@@ -1,5 +1,7 @@
 #include "stdafx.h"
 
+#include "SignChecker.h"
+
 
 extern double agree_param;
 extern double Eps;

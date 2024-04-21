@@ -1,5 +1,11 @@
 #pragma once
 
+#include <memory>
+#include <vector>
+
+#include "Matrix.h"
+#include "SignatureData.h"
+
 extern double balance;
 
 class SignChecker
