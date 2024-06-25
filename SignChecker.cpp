@@ -6,6 +6,17 @@
 extern double agree_param;
 extern double Eps;
 
+namespace
+{
+double RelativeDifference(double left, double right)
+{
+	const double denominator = std::max(std::max(std::abs(left), std::abs(right)), Eps);
+	if (denominator <= Eps)
+		return 0.0;
+	return std::abs(left - right) / denominator;
+}
+}
+
 
 SignChecker::SignChecker()
 {
@@ -55,8 +66,9 @@ void SignChecker::GenerateMatixeByIPen(int icheck, CTab *ipens, int npens)
 		for (int j = 0; j < i; j++)
 		{
 			argchj = (*mySimpleCheckFunctions[icheck])(ipens, j);
-			argval = abs(argchi - argchj);
-			if (npens < 3) argval /= std::max(argchi, argchj);
+			argval = std::abs(argchi - argchj);
+			if (npens < 3)
+				argval /= std::max(std::max(std::abs(argchi), std::abs(argchj)), Eps);
 			this->SimpleMch[icheck].SetElem(i,j,argval);
 		}
 	}
@@ -64,6 +76,10 @@ void SignChecker::GenerateMatixeByIPen(int icheck, CTab *ipens, int npens)
 
 bool SignChecker::SimpleCheckForRandomForge(CTab *ipens, int npens)
 {
+	this->SimpleTestResult = 0.0;
+	if (ipens == nullptr || npens < 2)
+		return false;
+
 	for (int i = 0; i < this->SimpleChecks; i++)
 	{
 		this->SimpleMch[i].Init(npens, npens);
@@ -77,6 +93,13 @@ bool SignChecker::SimpleCheckForRandomForge(CTab *ipens, int npens)
 
 bool SignChecker::DTWCheckForSimpleForge(DPoints *dpens, SPoints *spens, int npens)
 {
+	this->DTWTestResult = 0.0;
+	if (dpens == nullptr || spens == nullptr || npens < 2)
+		return false;
+
+	for (int i = 0; i < npens; ++i)
+		if (spens[i].GetN() == 0)
+			return false;
 
 	for (int i = 0; i < this->DTWChecks; i++)
 	{
@@ -96,6 +119,9 @@ bool SignChecker::DTWCheckForSimpleForge(DPoints *dpens, SPoints *spens, int npe
 
 double SignChecker::CalcDifference( Matrix<double>& ratioM_withCheckedSign, Matrix<double>& ratioM_withoutCheckedSign, int npens)
 {
+	if (npens <= 0)
+		return 1.0;
+
 	int imax = 0;
 	int jmax = 0;
 	double elmaxch, elavgch, elavg, ratval;
@@ -117,7 +143,7 @@ double SignChecker::CalcDifference( Matrix<double>& ratioM_withCheckedSign, Matr
 	}
 	else
 	{
-		ratval = abs(elavgch - elavg) / std::max(elavgch, std::max(elavg, Eps));
+		ratval = RelativeDifference(elavgch, elavg);
 	}
 
 	return ratval;
@@ -125,27 +151,21 @@ double SignChecker::CalcDifference( Matrix<double>& ratioM_withCheckedSign, Matr
 
 double SignChecker::DTWCalcDifference(int icheck, int npens)
 {
-	double ratval;
+	if (npens <= 0)
+		return 1.0;
 
 	int jCVcheckmax = this->CVch[icheck].GetJMaxElInI(npens - 1);
+	jCVcheckmax = std::min(jCVcheckmax, this->DTW[icheck].GetN() - 1);
 
 	double DTWavg = this->DTW[icheck].AvgByI(jCVcheckmax);
-	double sigma = sqrt(this->DTW[icheck].SumSqByI(jCVcheckmax, DTWavg));
-	double sigmacheck = abs(this->DTWch[icheck](npens - 1, jCVcheckmax) - DTWavg);
-
-	if ((sigma == 0) && (sigmacheck == 0))
-		ratval = 0;
-	else
-		ratval = abs(sigma - sigmacheck) / std::max(sigmacheck, sigma);
+	double sigma = std::sqrt(this->DTW[icheck].SumSqByI(jCVcheckmax, DTWavg));
+	double sigmacheck = std::abs(this->DTWch[icheck](npens - 1, jCVcheckmax) - DTWavg);
+	double ratval = RelativeDifference(sigma, sigmacheck);
 
 	double CGavg = this->CG[icheck].AvgByI(jCVcheckmax);
-	sigma = sqrt(this->CG[icheck].SumSqByI(jCVcheckmax, CGavg));
-	sigmacheck = abs(this->CGch[icheck](npens - 1, jCVcheckmax) - CGavg);
-
-	if ((sigma == 0) && (sigmacheck == 0))
-		ratval += 0;
-	else
-		ratval += abs(sigma - sigmacheck) / std::max(sigmacheck, sigma);
+	sigma = std::sqrt(this->CG[icheck].SumSqByI(jCVcheckmax, CGavg));
+	sigmacheck = std::abs(this->CGch[icheck](npens - 1, jCVcheckmax) - CGavg);
+	ratval += RelativeDifference(sigma, sigmacheck);
 
 	return ratval/2.0;
 }
@@ -162,6 +182,9 @@ void SignChecker::DTW_Go(int icheck, DPoints* dpens, SPoints *spens, int i, int 
 	int Ni, Nj, Nt;
 	Ni = spens[i].GetN();
 	Nj = spens[j].GetN();
+	if (Ni == 0 || Nj == 0)
+		return;
+
 	Matrix<double> D(Ni, Nj);
 	SPoints TPeni, TPenj;
 
@@ -176,11 +199,13 @@ void SignChecker::DTW_Go(int icheck, DPoints* dpens, SPoints *spens, int i, int 
 		this->Ncg[icheck].SetElem(j, i, Nt);
 
 		if (Nt == 0) Nt = 1;
-		this->CGch[icheck].SetElem(i, j, this->DTW_CaclGlobalDeformation(D, TPeni, TPenj)/double(Nt));
-		this->CGch[icheck].SetElem(j, i, this->DTW_CaclGlobalDeformation(D, TPeni, TPenj) / double(Nt));
+		const double globalDeformation = this->DTW_CaclGlobalDeformation(D, TPeni, TPenj) / double(Nt);
+		this->CGch[icheck].SetElem(i, j, globalDeformation);
+		this->CGch[icheck].SetElem(j, i, globalDeformation);
 
-		this->CVch[icheck].SetElem(i, j, this->DTW_CalcDetermination(TPeni, dpens[i], TPenj, dpens[j]));
-		this->CVch[icheck].SetElem(j, i, this->DTW_CalcDetermination(TPeni, dpens[i], TPenj, dpens[j]));
+		const double determination = this->DTW_CalcDetermination(TPeni, dpens[i], TPenj, dpens[j]);
+		this->CVch[icheck].SetElem(i, j, determination);
+		this->CVch[icheck].SetElem(j, i, determination);
 	}
 }
 
@@ -190,6 +215,8 @@ bool SignChecker::DTW_InitMatrix(int icheck, Matrix<double>& D, DPoints& dpeni, 
 	int ik, jk;
 	Ni = speni.GetN();
 	Nj = spenj.GetN();
+	if (Ni == 0 || Nj == 0 || D.GetN() != Ni || D.GetM() != Nj)
+		return false;
 
 	double Dij, Dikj, Dijk, Dikjk, minDij;
 	std::vector<double> xpars(4);
@@ -302,94 +329,53 @@ bool SignChecker::DTW_InitMatrix(int icheck, Matrix<double>& D, DPoints& dpeni, 
 
 void SignChecker::DTW_TraceBack(Matrix<double>& D, SPoints& tranformpeni, SPoints& tranformpenj)
 {
-	int Ni, Nj, i, j;
-	Ni = D.GetN();
-	Nj = D.GetM();
-	double Dij, Dikj, Dijk, Dikjk, minDij;
-	int mini, minj;
-	int ik, jk;
-	double GC = D(Ni - 1, Nj - 1);
-	//std::cout << " DTW_TraceBack\n " ;
-	i = Ni - 1; j = Nj - 1;
-	do {
-		minDij = D(i, j);
-		mini = -1;
-		minj = -1;
-		for (int k = 1; k < DTWwindow + 1; k++)
-		{
-			ik = std::max(i - k, 0);
-			jk = std::max(j - k, 0);
-			Dikj = D(ik, j);
-			Dijk = D(i, jk);
-			Dikjk = D(ik, jk);
-			if (Dikj < minDij)
-				if (Dikj < Dijk)
-					if (Dikj < Dikjk)
-					{
-						minDij = Dikj;
-						mini = ik;
-						i = ik;
-						minj = j;
-					}
-					else
-					{
-						minDij = Dikjk;
-						mini = ik;
-						i = ik;
-						minj = jk;
-						j = jk;
-					}
-				else
-					if (Dijk < Dikjk)
-					{
-						minDij = Dijk;
-						mini = i;
-						minj = jk;
-						j = jk;
-					}
-					else
-					{
-						minDij = Dikjk;
-						mini = ik;
-						i = ik;
-						minj = jk;
-						j = jk;
-					}
-			else
-				if (Dijk < minDij)
-					if (Dijk < Dikjk)
-					{
-						minDij = Dikj;
-						mini = i;
-						minj = jk;
-						j = jk;
-					}
-					else
-					{
-						minDij = Dikjk;
-						mini = ik;
-						i = ik;
-						minj = jk;
-						j = jk;
-					}
-				else
-					if (Dikjk < minDij)
-					{
-						minDij = Dikjk;
-						mini = i;
-						minj = jk;
-						j = jk;
-					}
-		}
-		if ((mini != -1) && (minj != -1))
-		{
-			//std::cout << mini << " - " << minj << "\n";
-			tranformpeni.PushElem(mini);
-			tranformpenj.PushElem(minj);
-		}
-		else break;
+	const int Ni = D.GetN();
+	const int Nj = D.GetM();
+	if (Ni == 0 || Nj == 0)
+		return;
 
-	} while (i != 0 || j != 0);
+	int i = Ni - 1;
+	int j = Nj - 1;
+	const int window = std::max(1, this->DTWwindow);
+
+	while (i != 0 || j != 0)
+	{
+		double minDij = std::numeric_limits<double>::infinity();
+		int mini = i;
+		int minj = j;
+
+		const auto tryCandidate = [&](int candidateI, int candidateJ)
+		{
+			if (candidateI == i && candidateJ == j)
+				return;
+
+			const double value = D(candidateI, candidateJ);
+			if (value < minDij)
+			{
+				minDij = value;
+				mini = candidateI;
+				minj = candidateJ;
+			}
+		};
+
+		for (int k = 1; k <= window; k++)
+		{
+			const int ik = std::max(i - k, 0);
+			const int jk = std::max(j - k, 0);
+
+			tryCandidate(ik, jk);
+			tryCandidate(ik, j);
+			tryCandidate(i, jk);
+		}
+
+		if (mini == i && minj == j)
+			break;
+
+		i = mini;
+		j = minj;
+		tranformpeni.PushElem(i);
+		tranformpenj.PushElem(j);
+	}
 }
 
 double SignChecker::DTW_CaclGlobalDeformation(Matrix<double>& D, SPoints& tranformpeni, SPoints& tranformpenj)
@@ -397,8 +383,8 @@ double SignChecker::DTW_CaclGlobalDeformation(Matrix<double>& D, SPoints& tranfo
 	int Nk = tranformpeni.GetN();
 	double CG = 0;
 
-	for (int i = 1; i < Nk - 1; i++)
-		CG += abs(D(tranformpeni[Nk - i], tranformpenj[Nk - i]) - D(tranformpeni[Nk - (i+1)], tranformpenj[Nk - (i+1)]));
+	for (int i = 1; i < Nk; i++)
+		CG += std::abs(D(tranformpeni[i - 1], tranformpenj[i - 1]) - D(tranformpeni[i], tranformpenj[i]));
 
 	return CG;
 }
@@ -406,6 +392,8 @@ double SignChecker::DTW_CaclGlobalDeformation(Matrix<double>& D, SPoints& tranfo
 double SignChecker::DTW_CalcDetermination(SPoints& tpeni, DPoints& dpeni, SPoints& tpenj, DPoints& dpenj)
 {
 	int N = tpeni.GetN();
+	if (N == 0 || tpenj.GetN() != N)
+		return 0.0;
 
 	double xci, yci, xcj, ycj;
 	xci = tpeni.AvgDX(dpeni);
@@ -437,5 +425,6 @@ double SignChecker::DTW_CalcDetermination(SPoints& tpeni, DPoints& dpeni, SPoint
 	}
 	if (sumsqx == 0) sumsqx = Eps;
 	if (sumsqy == 0) sumsqy = Eps;
-	return (sumi + sumj)*(sumi + sumj) / (sumsqx*sumsqy);
+	const double determination = (sumi + sumj)*(sumi + sumj) / (sumsqx*sumsqy);
+	return std::max(0.0, std::min(1.0, determination));
 }
