@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(DTW LANGUAGES CXX)
+project(DTW VERSION 0.1.0 LANGUAGES CXX)
 
+include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
 add_library(dtw
@@ -43,5 +44,23 @@ install(FILES
 
 install(EXPORT DTWTargets
     NAMESPACE DTW::
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/DTW"
+)
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/DTWConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/DTWConfig.cmake"
+    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/DTW"
+)
+
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/DTWConfigVersion.cmake"
+    VERSION "${PROJECT_VERSION}"
+    COMPATIBILITY SameMajorVersion
+)
+
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/DTWConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/DTWConfigVersion.cmake"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/DTW"
 )
