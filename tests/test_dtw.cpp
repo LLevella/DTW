@@ -17,6 +17,11 @@ DPoints MakeLine()
     return DPoints{{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
 }
 
+DPoints MakeShiftedScaledLine()
+{
+    return DPoints{{10.0, -3.0}, {12.0, -1.0}, {14.0, -3.0}};
+}
+
 void TestMatrixStorageAndExtremes()
 {
     Matrix<double> matrix;
@@ -62,12 +67,14 @@ void TestTraceBackHandlesEqualCosts()
 
     checker.DTW_TraceBack(costs, transformedI, transformedJ);
 
-    assert(transformedI.GetN() == 2);
-    assert(transformedJ.GetN() == 2);
-    assert(transformedI[0] == 1);
-    assert(transformedJ[0] == 1);
-    assert(transformedI[1] == 0);
-    assert(transformedJ[1] == 0);
+    assert(transformedI.GetN() == 3);
+    assert(transformedJ.GetN() == 3);
+    assert(transformedI[0] == 2);
+    assert(transformedJ[0] == 2);
+    assert(transformedI[1] == 1);
+    assert(transformedJ[1] == 1);
+    assert(transformedI[2] == 0);
+    assert(transformedJ[2] == 0);
 }
 
 void TestSimpleChecksResetAndAvoidZeroDivision()
@@ -102,6 +109,21 @@ void TestDTWIdenticalSignatures()
     assert(checker.DTW_InitMatrix(0, costs, dpens[0], spens[0], dpens[1], spens[1]));
     ExpectNear(costs(2, 2), 0.0);
 }
+
+void TestDTWNormalizesTranslationAndScale()
+{
+    DPoints dpens[2] = {MakeLine(), MakeShiftedScaledLine()};
+    SPoints spens[2] = {SPoints::FullRange(dpens[0].GetN()), SPoints::FullRange(dpens[1].GetN())};
+    SignChecker checker;
+
+    Matrix<double> cityBlockCosts(3, 3);
+    assert(checker.DTW_InitMatrix(0, cityBlockCosts, dpens[0], spens[0], dpens[1], spens[1]));
+    ExpectNear(cityBlockCosts(2, 2), 0.0);
+
+    Matrix<double> velocityCosts(3, 3);
+    assert(checker.DTW_InitMatrix(2, velocityCosts, dpens[0], spens[0], dpens[1], spens[1]));
+    ExpectNear(velocityCosts(2, 2), 0.0);
+}
 }
 
 int main()
@@ -110,4 +132,5 @@ int main()
     TestTraceBackHandlesEqualCosts();
     TestSimpleChecksResetAndAvoidZeroDivision();
     TestDTWIdenticalSignatures();
+    TestDTWNormalizesTranslationAndScale();
 }
