@@ -22,6 +22,40 @@ double RelativeDifference(double left, double right)
 	return std::abs(left - right) / denominator;
 }
 
+double RowRmsPrefix(const Matrix<double>& matrix, int row, int count)
+{
+	if (count <= 0)
+		return 0.0;
+
+	double sumSquares = 0.0;
+	for (int j = 0; j < count; ++j)
+	{
+		const double value = matrix(row, j);
+		sumSquares += value * value;
+	}
+	return std::sqrt(sumSquares / static_cast<double>(count));
+}
+
+double PairwiseRms(const Matrix<double>& matrix, int count)
+{
+	if (count < 2)
+		return 0.0;
+
+	double sumSquares = 0.0;
+	int pairs = 0;
+	for (int i = 1; i < count; ++i)
+	{
+		for (int j = 0; j < i; ++j)
+		{
+			const double value = matrix(i, j);
+			sumSquares += value * value;
+			++pairs;
+		}
+	}
+
+	return pairs == 0 ? 0.0 : std::sqrt(sumSquares / static_cast<double>(pairs));
+}
+
 SampledPen BuildNormalizedSample(DPoints& points, SPoints& samples)
 {
 	SampledPen result;
@@ -161,18 +195,24 @@ SignChecker::SignChecker()
 
 void SignChecker::GenerateMatixeByIPen(int icheck, CTab *ipens, int npens)
 {
-	double argchi, argchj, argval;
+	std::vector<double> values(static_cast<std::size_t>(npens));
+	for (int i = 0; i < npens; i++)
+		values[static_cast<std::size_t>(i)] = (*mySimpleCheckFunctions[icheck])(ipens, i);
 
 	for (int i = 0; i < npens; i++)
 	{
-		argchi = (*mySimpleCheckFunctions[icheck])(ipens, i);
 		for (int j = 0; j < i; j++)
 		{
-			argchj = (*mySimpleCheckFunctions[icheck])(ipens, j);
-			argval = std::abs(argchi - argchj);
+			double argval = std::abs(values[static_cast<std::size_t>(i)] - values[static_cast<std::size_t>(j)]);
 			if (npens < 3)
-				argval /= std::max(std::max(std::abs(argchi), std::abs(argchj)), Eps);
+			{
+				const double denominator = std::max(
+					std::max(std::abs(values[static_cast<std::size_t>(i)]), std::abs(values[static_cast<std::size_t>(j)])),
+					Eps);
+				argval /= denominator;
+			}
 			this->SimpleMch[icheck].SetElem(i,j,argval);
+			this->SimpleMch[icheck].SetElem(j,i,argval);
 		}
 	}
 }
@@ -222,34 +262,20 @@ bool SignChecker::DTWCheckForSimpleForge(DPoints *dpens, SPoints *spens, int npe
 
 double SignChecker::CalcDifference( Matrix<double>& ratioM_withCheckedSign, Matrix<double>& ratioM_withoutCheckedSign, int npens)
 {
-	if (npens <= 0)
+	if (npens < 2)
 		return 1.0;
 
-	int imax = 0;
-	int jmax = 0;
-	double elmaxch, elavgch, elavg, ratval;
-
-	elmaxch = ratioM_withCheckedSign.GetIndMaxElem(imax, jmax);
-
-	elavgch = ratioM_withCheckedSign.AvgByI(npens - 1);
-	elavg = ratioM_withoutCheckedSign.AvgAll();
-
-	if (imax == npens - 1)
-		elavgch = elmaxch;
+	const double checkedRms = RowRmsPrefix(ratioM_withCheckedSign, npens - 1, npens - 1);
 
 	if (npens < 3)
 	{
-		if (elavgch > 1)
-			ratval = 1.0 - (1.0 / elavgch);
-		else
-			ratval = elavgch;
-	}
-	else
-	{
-		ratval = RelativeDifference(elavgch, elavg);
+		if (checkedRms > 1)
+			return 1.0 - (1.0 / checkedRms);
+		return checkedRms;
 	}
 
-	return ratval;
+	const double referenceRms = PairwiseRms(ratioM_withoutCheckedSign, ratioM_withoutCheckedSign.GetN());
+	return RelativeDifference(checkedRms, referenceRms);
 }
 
 double SignChecker::DTWCalcDifference(int icheck, int npens)

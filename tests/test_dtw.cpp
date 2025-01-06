@@ -92,6 +92,30 @@ void TestSimpleChecksResetAndAvoidZeroDivision()
     assert(!checker.SimpleCheckForRandomForge(nullptr, 2));
 }
 
+void TestSimpleDifferenceUsesReferenceRms()
+{
+    SignChecker checker;
+    Matrix<double> withChecked(3, 3);
+    Matrix<double> withoutChecked(2, 2);
+
+    withChecked.SetElem(0, 1, 2.0);
+    withChecked.SetElem(1, 0, 2.0);
+    withChecked.SetElem(2, 0, 2.0);
+    withChecked.SetElem(0, 2, 2.0);
+    withChecked.SetElem(2, 1, 2.0);
+    withChecked.SetElem(1, 2, 2.0);
+    withoutChecked.SetElem(0, 1, 2.0);
+    withoutChecked.SetElem(1, 0, 2.0);
+
+    ExpectNear(checker.CalcDifference(withChecked, withoutChecked, 3), 0.0);
+
+    withChecked.SetElem(2, 0, 8.0);
+    withChecked.SetElem(0, 2, 8.0);
+    withChecked.SetElem(2, 1, 8.0);
+    withChecked.SetElem(1, 2, 8.0);
+    ExpectNear(checker.CalcDifference(withChecked, withoutChecked, 3), 0.75);
+}
+
 void TestDTWIdenticalSignatures()
 {
     balance = 0.0;
@@ -131,6 +155,7 @@ int main()
     TestMatrixStorageAndExtremes();
     TestTraceBackHandlesEqualCosts();
     TestSimpleChecksResetAndAvoidZeroDivision();
+    TestSimpleDifferenceUsesReferenceRms();
     TestDTWIdenticalSignatures();
     TestDTWNormalizesTranslationAndScale();
 }
