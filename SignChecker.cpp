@@ -175,13 +175,6 @@ SignChecker::SignChecker()
 	this->SimpleM = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->SimpleChecks]);
 	this->SimpleMch = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->SimpleChecks]);
 
-	this->myDTWCheckFunctions = std::unique_ptr<DTWCheckFunctions[]>(new DTWCheckFunctions[DTWChecks]);
-
-	myDTWCheckFunctions[0] = &CityBlockMetric;
-	//myDTWCheckFunctions[1] = &EuclideMetric;
-	myDTWCheckFunctions[2] = &VelocityMetric;
-	myDTWCheckFunctions[1] = &SinMetric;
-
 	this->DTWch = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->DTWChecks]);
 	this->DTW = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->DTWChecks]);
 

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <memory>
-#include <vector>
 
 #include "Matrix.h"
 #include "SignatureData.h"
@@ -24,10 +23,6 @@ class SignChecker
 	// функции простых проверок
 	typedef double(*SimpleCheckFunctions)(CTab *ipens, int i);
 	std::unique_ptr <SimpleCheckFunctions[]> mySimpleCheckFunctions;
-
-	// функции DTW проверок
-	typedef double(*DTWCheckFunctions)(std::vector<double> &x, std::vector<double> &y);
-	std::unique_ptr <DTWCheckFunctions[]> myDTWCheckFunctions;
 
 	// результаты вычисления оптимального пути
 	std::unique_ptr <Matrix<double>[]> DTWch;
