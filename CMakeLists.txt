@@ -38,7 +38,6 @@ install(FILES
     Matrix.h
     SignChecker.h
     SignatureData.h
-    stdafx.h
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/dtw"
 )
 

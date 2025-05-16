@@ -2,7 +2,6 @@
 
 #include <cmath>
 
-double agree_param = 0.5;
 double Eps = 1e-12;
 double balance = 0.5;
 

@@ -1,475 +1,1056 @@
-#include "stdafx.h"
-
 #include "SignChecker.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <numeric>
+#include <vector>
 
-extern double agree_param;
 extern double Eps;
 
 namespace
 {
+constexpr double Pi = 3.141592653589793238462643383279502884;
+
 struct SampledPen
 {
-	std::vector<double> x;
-	std::vector<double> y;
+    std::vector<double> x;
+    std::vector<double> y;
+    std::vector<double> pressure;
+    std::vector<double> timestamp;
+    std::vector<double> tangent;        // углы касательной [-π, π]
+    std::vector<double> curvature;
+    std::vector<double> seglen;         // длина сегмента к предыдущей точке
+    std::vector<double> velocity;       // seglen / Δt (если есть timestamp)
+    std::vector<double> pseudopressure; // оценка скорости через плотность точек
+    bool has_pressure = false;
+    bool has_timestamp = false;
 };
 
 double RelativeDifference(double left, double right)
 {
-	const double denominator = std::max(std::max(std::abs(left), std::abs(right)), Eps);
-	if (denominator <= Eps)
-		return 0.0;
-	return std::abs(left - right) / denominator;
+    const double denominator = std::max(std::max(std::abs(left), std::abs(right)), Eps);
+    if (denominator <= Eps)
+        return 0.0;
+    return std::abs(left - right) / denominator;
+}
+
+double Median(std::vector<double> values)
+{
+    if (values.empty())
+        return 0.0;
+    std::sort(values.begin(), values.end());
+    const std::size_t n = values.size();
+    if (n % 2 == 1)
+        return values[n / 2];
+    return 0.5 * (values[n / 2 - 1] + values[n / 2]);
 }
 
 double RowRmsPrefix(const Matrix<double>& matrix, int row, int count)
 {
-	if (count <= 0)
-		return 0.0;
+    if (count <= 0)
+        return 0.0;
+    double sumSquares = 0.0;
+    for (int j = 0; j < count; ++j)
+    {
+        const double value = matrix(row, j);
+        sumSquares += value * value;
+    }
+    return std::sqrt(sumSquares / static_cast<double>(count));
+}
 
-	double sumSquares = 0.0;
-	for (int j = 0; j < count; ++j)
-	{
-		const double value = matrix(row, j);
-		sumSquares += value * value;
-	}
-	return std::sqrt(sumSquares / static_cast<double>(count));
+double RowMedianPrefix(const Matrix<double>& matrix, int row, int count)
+{
+    if (count <= 0)
+        return 0.0;
+    std::vector<double> values;
+    values.reserve(static_cast<std::size_t>(count));
+    for (int j = 0; j < count; ++j)
+        values.push_back(std::abs(matrix(row, j)));
+    return Median(std::move(values));
 }
 
 double PairwiseRms(const Matrix<double>& matrix, int count)
 {
-	if (count < 2)
-		return 0.0;
-
-	double sumSquares = 0.0;
-	int pairs = 0;
-	for (int i = 1; i < count; ++i)
-	{
-		for (int j = 0; j < i; ++j)
-		{
-			const double value = matrix(i, j);
-			sumSquares += value * value;
-			++pairs;
-		}
-	}
-
-	return pairs == 0 ? 0.0 : std::sqrt(sumSquares / static_cast<double>(pairs));
+    if (count < 2)
+        return 0.0;
+    double sumSquares = 0.0;
+    int pairs = 0;
+    for (int i = 1; i < count; ++i)
+        for (int j = 0; j < i; ++j)
+        {
+            const double value = matrix(i, j);
+            sumSquares += value * value;
+            ++pairs;
+        }
+    return pairs == 0 ? 0.0 : std::sqrt(sumSquares / static_cast<double>(pairs));
 }
 
-SampledPen BuildNormalizedSample(DPoints& points, SPoints& samples)
+double PairwiseMedian(const Matrix<double>& matrix, int count)
 {
-	SampledPen result;
-	const int count = samples.GetN();
-	result.x.reserve(static_cast<std::size_t>(count));
-	result.y.reserve(static_cast<std::size_t>(count));
-
-	double minX = std::numeric_limits<double>::infinity();
-	double minY = std::numeric_limits<double>::infinity();
-	double maxX = -std::numeric_limits<double>::infinity();
-	double maxY = -std::numeric_limits<double>::infinity();
-	double sumX = 0.0;
-	double sumY = 0.0;
-
-	for (int i = 0; i < count; ++i)
-	{
-		const double x = points.GetX(samples[i]);
-		const double y = points.GetY(samples[i]);
-		result.x.push_back(x);
-		result.y.push_back(y);
-		sumX += x;
-		sumY += y;
-		minX = std::min(minX, x);
-		minY = std::min(minY, y);
-		maxX = std::max(maxX, x);
-		maxY = std::max(maxY, y);
-	}
-
-	if (count == 0)
-		return result;
-
-	const double centerX = sumX / static_cast<double>(count);
-	const double centerY = sumY / static_cast<double>(count);
-	const double width = maxX - minX;
-	const double height = maxY - minY;
-	const double scale = std::max(std::sqrt(width * width + height * height), Eps);
-
-	for (int i = 0; i < count; ++i)
-	{
-		result.x[static_cast<std::size_t>(i)] = (result.x[static_cast<std::size_t>(i)] - centerX) / scale;
-		result.y[static_cast<std::size_t>(i)] = (result.y[static_cast<std::size_t>(i)] - centerY) / scale;
-	}
-
-	return result;
+    if (count < 2)
+        return 0.0;
+    std::vector<double> values;
+    values.reserve(static_cast<std::size_t>(count) * static_cast<std::size_t>(count - 1) / 2);
+    for (int i = 1; i < count; ++i)
+        for (int j = 0; j < i; ++j)
+            values.push_back(std::abs(matrix(i, j)));
+    return Median(std::move(values));
 }
 
-double SegmentLength(const SampledPen& pen, int index)
+void SmoothInplace(std::vector<double>& v, int window)
 {
-	if (index <= 0)
-		return 0.0;
-
-	const std::size_t current = static_cast<std::size_t>(index);
-	const std::size_t previous = static_cast<std::size_t>(index - 1);
-	const double dx = pen.x[current] - pen.x[previous];
-	const double dy = pen.y[current] - pen.y[previous];
-	return std::sqrt(dx * dx + dy * dy);
+    if (window <= 1 || v.size() < 2)
+        return;
+    const int half = window / 2;
+    std::vector<double> out(v.size());
+    for (std::size_t i = 0; i < v.size(); ++i)
+    {
+        double sum = 0.0;
+        int count = 0;
+        for (int k = -half; k <= half; ++k)
+        {
+            const int j = static_cast<int>(i) + k;
+            if (j < 0 || j >= static_cast<int>(v.size()))
+                continue;
+            sum += v[static_cast<std::size_t>(j)];
+            ++count;
+        }
+        out[i] = count > 0 ? sum / static_cast<double>(count) : v[i];
+    }
+    v.swap(out);
 }
 
-double DirectionDifference(const SampledPen& left, int i, const SampledPen& right, int j)
+void ArclengthResample(std::vector<double>& x,
+                       std::vector<double>& y,
+                       std::vector<double>* pressure,
+                       std::vector<double>* timestamp,
+                       int target)
 {
-	if (i <= 0 || j <= 0)
-		return 0.0;
+    if (target < 2 || x.size() < 2 || x.size() != y.size())
+        return;
 
-	const std::size_t li = static_cast<std::size_t>(i);
-	const std::size_t lj = static_cast<std::size_t>(j);
-	const double lvx = left.x[li] - left.x[li - 1];
-	const double lvy = left.y[li] - left.y[li - 1];
-	const double rvx = right.x[lj] - right.x[lj - 1];
-	const double rvy = right.y[lj] - right.y[lj - 1];
-	const double leftLength = std::sqrt(lvx * lvx + lvy * lvy);
-	const double rightLength = std::sqrt(rvx * rvx + rvy * rvy);
+    const std::size_t n = x.size();
+    std::vector<double> s(n, 0.0);
+    for (std::size_t i = 1; i < n; ++i)
+    {
+        const double dx = x[i] - x[i - 1];
+        const double dy = y[i] - y[i - 1];
+        s[i] = s[i - 1] + std::sqrt(dx * dx + dy * dy);
+    }
+    const double total = s.back();
+    if (total <= Eps)
+        return;
 
-	if (leftLength <= Eps || rightLength <= Eps)
-		return 0.0;
+    const std::size_t targetSize = static_cast<std::size_t>(target);
+    std::vector<double> nx(targetSize);
+    std::vector<double> ny(targetSize);
+    std::vector<double> np;
+    std::vector<double> nt;
+    if (pressure)
+        np.resize(targetSize);
+    if (timestamp)
+        nt.resize(targetSize);
 
-	const double cross = lvx * rvy - lvy * rvx;
-	return std::abs(cross) / (leftLength * rightLength);
+    std::size_t idx = 1;
+    for (std::size_t k = 0; k < targetSize; ++k)
+    {
+        const double target_s = total * static_cast<double>(k) / static_cast<double>(target - 1);
+        while (idx < n - 1 && s[idx] < target_s)
+            ++idx;
+        const double seg = s[idx] - s[idx - 1];
+        const double a = seg <= Eps ? 0.0 : (target_s - s[idx - 1]) / seg;
+        nx[k] = x[idx - 1] + a * (x[idx] - x[idx - 1]);
+        ny[k] = y[idx - 1] + a * (y[idx] - y[idx - 1]);
+        if (pressure)
+            np[k] = (*pressure)[idx - 1] + a * ((*pressure)[idx] - (*pressure)[idx - 1]);
+        if (timestamp)
+            nt[k] = (*timestamp)[idx - 1] + a * ((*timestamp)[idx] - (*timestamp)[idx - 1]);
+    }
+
+    x.swap(nx);
+    y.swap(ny);
+    if (pressure)
+        pressure->swap(np);
+    if (timestamp)
+        timestamp->swap(nt);
 }
 
-double LocalDTWCost(int icheck, const SampledPen& left, int i, const SampledPen& right, int j)
+void PcaRotate(std::vector<double>& x, std::vector<double>& y)
 {
-	const std::size_t li = static_cast<std::size_t>(i);
-	const std::size_t lj = static_cast<std::size_t>(j);
+    if (x.size() < 2)
+        return;
+    const double n = static_cast<double>(x.size());
+    double mx = 0.0;
+    double my = 0.0;
+    for (std::size_t i = 0; i < x.size(); ++i)
+    {
+        mx += x[i];
+        my += y[i];
+    }
+    mx /= n;
+    my /= n;
 
-	switch (icheck)
-	{
-	case 0:
-		return std::abs(left.x[li] - right.x[lj]) + std::abs(left.y[li] - right.y[lj]);
-	case 1:
-		return DirectionDifference(left, i, right, j);
-	case 2:
-		return std::abs(SegmentLength(left, i) - SegmentLength(right, j));
-	default:
-		return 0.0;
-	}
-}
+    double cxx = 0.0;
+    double cyy = 0.0;
+    double cxy = 0.0;
+    for (std::size_t i = 0; i < x.size(); ++i)
+    {
+        const double dx = x[i] - mx;
+        const double dy = y[i] - my;
+        cxx += dx * dx;
+        cyy += dy * dy;
+        cxy += dx * dy;
+    }
+    cxx /= n;
+    cyy /= n;
+    cxy /= n;
+
+    const double trace = cxx + cyy;
+    const double det = cxx * cyy - cxy * cxy;
+    const double disc = std::max(0.0, trace * trace / 4.0 - det);
+    const double lam = trace / 2.0 + std::sqrt(disc);
+
+    double vx;
+    double vy;
+    if (std::abs(cxy) > Eps)
+    {
+        vx = lam - cyy;
+        vy = cxy;
+    }
+    else
+    {
+        vx = (cxx >= cyy) ? 1.0 : 0.0;
+        vy = (cxx >= cyy) ? 0.0 : 1.0;
+    }
+    const double len = std::sqrt(vx * vx + vy * vy);
+    if (len <= Eps)
+        return;
+    vx /= len;
+    vy /= len;
+
+    for (std::size_t i = 0; i < x.size(); ++i)
+    {
+        const double dx = x[i] - mx;
+        const double dy = y[i] - my;
+        x[i] = mx + vx * dx + vy * dy;
+        y[i] = my - vy * dx + vx * dy;
+    }
 }
 
+void ZScoreNormalize(std::vector<double>& x, std::vector<double>& y)
+{
+    if (x.empty())
+        return;
+    const double n = static_cast<double>(x.size());
+    double mx = 0.0;
+    double my = 0.0;
+    for (std::size_t i = 0; i < x.size(); ++i)
+    {
+        mx += x[i];
+        my += y[i];
+    }
+    mx /= n;
+    my /= n;
+
+    double vx = 0.0;
+    double vy = 0.0;
+    for (std::size_t i = 0; i < x.size(); ++i)
+    {
+        vx += (x[i] - mx) * (x[i] - mx);
+        vy += (y[i] - my) * (y[i] - my);
+    }
+    const double sx = std::sqrt(std::max(vx / n, Eps));
+    const double sy = std::sqrt(std::max(vy / n, Eps));
+
+    for (std::size_t i = 0; i < x.size(); ++i)
+    {
+        x[i] = (x[i] - mx) / sx;
+        y[i] = (y[i] - my) / sy;
+    }
+}
+
+void CenterAndDiagScale(std::vector<double>& x, std::vector<double>& y)
+{
+    if (x.empty())
+        return;
+    double minX = std::numeric_limits<double>::infinity();
+    double minY = std::numeric_limits<double>::infinity();
+    double maxX = -std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+    double sumX = 0.0;
+    double sumY = 0.0;
+    for (std::size_t i = 0; i < x.size(); ++i)
+    {
+        sumX += x[i];
+        sumY += y[i];
+        minX = std::min(minX, x[i]);
+        minY = std::min(minY, y[i]);
+        maxX = std::max(maxX, x[i]);
+        maxY = std::max(maxY, y[i]);
+    }
+    const double cx = sumX / static_cast<double>(x.size());
+    const double cy = sumY / static_cast<double>(y.size());
+    const double w = maxX - minX;
+    const double h = maxY - minY;
+    const double scale = std::max(std::sqrt(w * w + h * h), Eps);
+
+    for (std::size_t i = 0; i < x.size(); ++i)
+    {
+        x[i] = (x[i] - cx) / scale;
+        y[i] = (y[i] - cy) / scale;
+    }
+}
+
+void ComputeDerivedFeatures(SampledPen& pen)
+{
+    const std::size_t n = pen.x.size();
+    pen.tangent.assign(n, 0.0);
+    pen.curvature.assign(n, 0.0);
+    pen.seglen.assign(n, 0.0);
+    pen.velocity.assign(n, 0.0);
+    pen.pseudopressure.assign(n, 0.0);
+
+    if (n < 2)
+        return;
+
+    for (std::size_t i = 1; i < n; ++i)
+    {
+        const double dx = pen.x[i] - pen.x[i - 1];
+        const double dy = pen.y[i] - pen.y[i - 1];
+        pen.seglen[i] = std::sqrt(dx * dx + dy * dy);
+    }
+    pen.seglen[0] = pen.seglen[1];
+
+    if (pen.has_timestamp)
+    {
+        for (std::size_t i = 1; i < n; ++i)
+        {
+            const double dt = pen.timestamp[i] - pen.timestamp[i - 1];
+            pen.velocity[i] = dt > Eps ? pen.seglen[i] / dt : 0.0;
+        }
+        pen.velocity[0] = pen.velocity[1];
+    }
+
+    std::vector<double> seglenSorted(pen.seglen);
+    const double medSeg = Median(std::move(seglenSorted));
+    const double scale = std::max(medSeg, Eps);
+    for (std::size_t i = 0; i < n; ++i)
+        pen.pseudopressure[i] = scale / std::max(pen.seglen[i], Eps);
+
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        const std::size_t prev = (i == 0) ? 0 : i - 1;
+        const std::size_t next = (i + 1 < n) ? i + 1 : i;
+        const double dx = pen.x[next] - pen.x[prev];
+        const double dy = pen.y[next] - pen.y[prev];
+        pen.tangent[i] = std::atan2(dy, dx);
+    }
+
+    for (std::size_t i = 1; i + 1 < n; ++i)
+    {
+        const double xp = pen.x[i + 1] - pen.x[i - 1];
+        const double yp = pen.y[i + 1] - pen.y[i - 1];
+        const double xpp = pen.x[i + 1] - 2.0 * pen.x[i] + pen.x[i - 1];
+        const double ypp = pen.y[i + 1] - 2.0 * pen.y[i] + pen.y[i - 1];
+        const double speedSq = xp * xp + yp * yp;
+        if (speedSq <= Eps)
+        {
+            pen.curvature[i] = 0.0;
+            continue;
+        }
+        const double denom = speedSq * std::sqrt(speedSq);
+        pen.curvature[i] = (xp * ypp - yp * xpp) / denom;
+    }
+}
+
+SampledPen BuildSampledPen(DPoints& points, SPoints& samples, const SignCheckerConfig& cfg)
+{
+    SampledPen pen;
+    const int count = samples.GetN();
+    if (count <= 0)
+        return pen;
+
+    pen.x.reserve(static_cast<std::size_t>(count));
+    pen.y.reserve(static_cast<std::size_t>(count));
+
+    bool hasP = true;
+    bool hasT = true;
+    for (int i = 0; i < count; ++i)
+    {
+        const int idx = samples[i];
+        pen.x.push_back(points.GetX(idx));
+        pen.y.push_back(points.GetY(idx));
+        if (!points.HasPressure(idx))
+            hasP = false;
+        if (!points.HasTimestamp(idx))
+            hasT = false;
+    }
+    pen.has_pressure = hasP;
+    pen.has_timestamp = hasT;
+    if (hasP)
+    {
+        pen.pressure.reserve(static_cast<std::size_t>(count));
+        for (int i = 0; i < count; ++i)
+            pen.pressure.push_back(points.GetPressure(samples[i]));
+    }
+    if (hasT)
+    {
+        pen.timestamp.reserve(static_cast<std::size_t>(count));
+        for (int i = 0; i < count; ++i)
+            pen.timestamp.push_back(points.GetTimestamp(samples[i]));
+    }
+
+    if (cfg.smooth)
+    {
+        SmoothInplace(pen.x, cfg.smooth_window);
+        SmoothInplace(pen.y, cfg.smooth_window);
+        if (pen.has_pressure)
+            SmoothInplace(pen.pressure, cfg.smooth_window);
+    }
+
+    if (cfg.arclength_resample && cfg.resample_points >= 2)
+    {
+        std::vector<double>* pp = pen.has_pressure ? &pen.pressure : nullptr;
+        std::vector<double>* tp = pen.has_timestamp ? &pen.timestamp : nullptr;
+        ArclengthResample(pen.x, pen.y, pp, tp, cfg.resample_points);
+    }
+
+    if (cfg.pca_rotate)
+        PcaRotate(pen.x, pen.y);
+
+    if (cfg.zscore_normalize)
+        ZScoreNormalize(pen.x, pen.y);
+    else
+        CenterAndDiagScale(pen.x, pen.y);
+
+    ComputeDerivedFeatures(pen);
+    return pen;
+}
+
+double AngularDistance(double a, double b)
+{
+    double diff = std::abs(a - b);
+    while (diff > Pi)
+        diff = std::abs(diff - 2.0 * Pi);
+    return diff / Pi; // [0, 1]
+}
+
+double LocalDTWCost(SignCheckerConfig::DtwChannel channel,
+                    const SampledPen& left, int i,
+                    const SampledPen& right, int j)
+{
+    const std::size_t li = static_cast<std::size_t>(i);
+    const std::size_t lj = static_cast<std::size_t>(j);
+
+    using DC = SignCheckerConfig::DtwChannel;
+    switch (channel)
+    {
+    case DC::CityBlock:
+        return std::abs(left.x[li] - right.x[lj]) + std::abs(left.y[li] - right.y[lj]);
+
+    case DC::Direction:
+    {
+        if (i <= 0 || j <= 0)
+            return 0.0;
+        const double lvx = left.x[li] - left.x[li - 1];
+        const double lvy = left.y[li] - left.y[li - 1];
+        const double rvx = right.x[lj] - right.x[lj - 1];
+        const double rvy = right.y[lj] - right.y[lj - 1];
+        const double leftLen = std::sqrt(lvx * lvx + lvy * lvy);
+        const double rightLen = std::sqrt(rvx * rvx + rvy * rvy);
+        if (leftLen <= Eps || rightLen <= Eps)
+            return 0.0;
+        const double cross = lvx * rvy - lvy * rvx;
+        return std::abs(cross) / (leftLen * rightLen);
+    }
+
+    case DC::SegmentLength:
+        return std::abs(left.seglen[li] - right.seglen[lj]);
+
+    case DC::TangentAngle:
+        return AngularDistance(left.tangent[li], right.tangent[lj]);
+
+    case DC::Curvature:
+        return std::abs(left.curvature[li] - right.curvature[lj]);
+
+    case DC::Pseudopressure:
+        return std::abs(left.pseudopressure[li] - right.pseudopressure[lj]);
+
+    case DC::Pressure:
+        if (!left.has_pressure || !right.has_pressure)
+            return 0.0;
+        return std::abs(left.pressure[li] - right.pressure[lj]);
+
+    case DC::Velocity:
+        if (!left.has_timestamp || !right.has_timestamp)
+            return 0.0;
+        return std::abs(left.velocity[li] - right.velocity[lj]);
+    }
+    return 0.0;
+}
+
+bool OutsideSakoeChiba(int i, int j, int Ni, int Nj, int band)
+{
+    if (band < 0 || Ni <= 1 || Nj <= 1)
+        return false;
+    const double iScaled = static_cast<double>(i) * static_cast<double>(Nj - 1) / static_cast<double>(Ni - 1);
+    return std::abs(iScaled - static_cast<double>(j)) > static_cast<double>(band);
+}
+
+struct ShapeFeatures
+{
+    double path_over_diag = 0.0;
+    double aspect = 0.0;
+    double curvature_mean = 0.0;
+};
+
+ShapeFeatures ComputeShape(DPoints& points, SPoints& samples, const SignCheckerConfig& cfg)
+{
+    ShapeFeatures features;
+    const int n = samples.GetN();
+    if (n <= 0)
+        return features;
+
+    double minX = std::numeric_limits<double>::infinity();
+    double minY = std::numeric_limits<double>::infinity();
+    double maxX = -std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+    double pathLen = 0.0;
+    double prevX = points.GetX(samples[0]);
+    double prevY = points.GetY(samples[0]);
+    for (int i = 0; i < n; ++i)
+    {
+        const double x = points.GetX(samples[i]);
+        const double y = points.GetY(samples[i]);
+        minX = std::min(minX, x);
+        minY = std::min(minY, y);
+        maxX = std::max(maxX, x);
+        maxY = std::max(maxY, y);
+        if (i > 0)
+        {
+            const double dx = x - prevX;
+            const double dy = y - prevY;
+            pathLen += std::sqrt(dx * dx + dy * dy);
+        }
+        prevX = x;
+        prevY = y;
+    }
+
+    const double w = std::max(maxX - minX, Eps);
+    const double h = std::max(maxY - minY, Eps);
+    const double diag = std::sqrt(w * w + h * h);
+    features.path_over_diag = diag <= Eps ? 0.0 : pathLen / diag;
+    features.aspect = w / h;
+
+    SampledPen sampled = BuildSampledPen(points, samples, cfg);
+    if (!sampled.curvature.empty())
+    {
+        double sum = 0.0;
+        for (const double k : sampled.curvature)
+            sum += std::abs(k);
+        features.curvature_mean = sum / static_cast<double>(sampled.curvature.size());
+    }
+    return features;
+}
+} // namespace
 
 SignChecker::SignChecker()
 {
-	this->DTWwindow = 1;
+    DTWwindow = 1;
+    SimpleChecks = 4;
+    DTWChecks = static_cast<int>(config_.dtw_channels.size());
+    ShapeChecks = 3;
 
-	this->SimpleChecks = 4;
-	this->DTWChecks = 3;
+    SimpleTestResult = 0.0;
+    DTWTestResult = 0.0;
+    ShapeTestResult = 0.0;
 
-	this->SimpleTestResult = 0.0;
-	this->DTWTestResult = 0.0;
+    mySimpleCheckFunctions = std::unique_ptr<SimpleCheckFunctions[]>(new SimpleCheckFunctions[SimpleChecks]);
+    mySimpleCheckFunctions[0] = &RatioXY;
+    mySimpleCheckFunctions[1] = &AvgXY;
+    mySimpleCheckFunctions[2] = &SinXY;
+    mySimpleCheckFunctions[3] = &RatioTouches;
 
-	this->mySimpleCheckFunctions = std::unique_ptr<SimpleCheckFunctions[]>(new SimpleCheckFunctions[SimpleChecks]);
+    SimpleM = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[SimpleChecks]);
+    SimpleMch = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[SimpleChecks]);
 
-	mySimpleCheckFunctions[0] = &RatioXY;
-	mySimpleCheckFunctions[1] = &AvgXY;
-	mySimpleCheckFunctions[2] = &SinXY;
-	mySimpleCheckFunctions[3] = &RatioTouches;
+    DTWch = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[DTWChecks]);
+    DTW   = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[DTWChecks]);
+    CGch  = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[DTWChecks]);
+    CG    = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[DTWChecks]);
+    CVch  = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[DTWChecks]);
+    Ncg   = std::unique_ptr<Matrix<int>[]>(new Matrix<int>[DTWChecks]);
 
-	this->SimpleM = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->SimpleChecks]);
-	this->SimpleMch = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->SimpleChecks]);
+    ShapeM   = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[ShapeChecks]);
+    ShapeMch = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[ShapeChecks]);
 
-	this->DTWch = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->DTWChecks]);
-	this->DTW = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->DTWChecks]);
+    ChannelWeights.assign(static_cast<std::size_t>(DTWChecks),
+                          1.0 / static_cast<double>(std::max(DTWChecks, 1)));
+}
 
-	this->CGch = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->DTWChecks]);
-	this->CG = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->DTWChecks]);
+void SignChecker::SetConfig(const SignCheckerConfig& config)
+{
+    config_ = config;
+    DTWwindow = std::max(1, config_.dtw_window);
+    DTWChecks = static_cast<int>(config_.dtw_channels.size());
+    if (DTWChecks <= 0)
+        DTWChecks = 1; // защитимся от пустого списка каналов
 
-	this->CVch = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[this->DTWChecks]);
+    DTWch = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[DTWChecks]);
+    DTW   = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[DTWChecks]);
+    CGch  = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[DTWChecks]);
+    CG    = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[DTWChecks]);
+    CVch  = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[DTWChecks]);
+    Ncg   = std::unique_ptr<Matrix<int>[]>(new Matrix<int>[DTWChecks]);
 
-	this->Ncg = std::unique_ptr<Matrix<int>[]>(new Matrix<int>[this->DTWChecks]);
+    ChannelWeights.assign(static_cast<std::size_t>(DTWChecks),
+                          1.0 / static_cast<double>(DTWChecks));
 }
 
 void SignChecker::GenerateMatixeByIPen(int icheck, CTab *ipens, int npens)
 {
-	std::vector<double> values(static_cast<std::size_t>(npens));
-	for (int i = 0; i < npens; i++)
-		values[static_cast<std::size_t>(i)] = (*mySimpleCheckFunctions[icheck])(ipens, i);
+    std::vector<double> values(static_cast<std::size_t>(npens));
+    for (int i = 0; i < npens; i++)
+        values[static_cast<std::size_t>(i)] = (*mySimpleCheckFunctions[icheck])(ipens, i);
 
-	for (int i = 0; i < npens; i++)
-	{
-		for (int j = 0; j < i; j++)
-		{
-			double argval = std::abs(values[static_cast<std::size_t>(i)] - values[static_cast<std::size_t>(j)]);
-			if (npens < 3)
-			{
-				const double denominator = std::max(
-					std::max(std::abs(values[static_cast<std::size_t>(i)]), std::abs(values[static_cast<std::size_t>(j)])),
-					Eps);
-				argval /= denominator;
-			}
-			this->SimpleMch[icheck].SetElem(i,j,argval);
-			this->SimpleMch[icheck].SetElem(j,i,argval);
-		}
-	}
+    for (int i = 0; i < npens; i++)
+    {
+        for (int j = 0; j < i; j++)
+        {
+            double argval = std::abs(values[static_cast<std::size_t>(i)] - values[static_cast<std::size_t>(j)]);
+            if (npens < 3)
+            {
+                const double denominator = std::max(
+                    std::max(std::abs(values[static_cast<std::size_t>(i)]), std::abs(values[static_cast<std::size_t>(j)])),
+                    Eps);
+                argval /= denominator;
+            }
+            this->SimpleMch[icheck].SetElem(i, j, argval);
+            this->SimpleMch[icheck].SetElem(j, i, argval);
+        }
+    }
 }
 
 bool SignChecker::SimpleCheckForRandomForge(CTab *ipens, int npens)
 {
-	this->SimpleTestResult = 0.0;
-	if (ipens == nullptr || npens < 2)
-		return false;
+    this->SimpleTestResult = 0.0;
+    if (ipens == nullptr || npens < 2)
+        return false;
 
-	for (int i = 0; i < this->SimpleChecks; i++)
-	{
-		this->SimpleMch[i].Init(npens, npens);
-		this->GenerateMatixeByIPen(i, ipens, npens);
-		this->SimpleM[i].Init(this->SimpleMch[i], 1, 1);
-		this->SimpleTestResult += 1 - CalcDifference(this->SimpleMch[i], this->SimpleM[i], npens);
-	}
-	this->SimpleTestResult /= double(this->SimpleChecks);
-	return true;
+    for (int i = 0; i < this->SimpleChecks; i++)
+    {
+        this->SimpleMch[i].Init(npens, npens);
+        this->GenerateMatixeByIPen(i, ipens, npens);
+        this->SimpleM[i].Init(this->SimpleMch[i], 1, 1);
+        this->SimpleTestResult += 1 - CalcDifference(this->SimpleMch[i], this->SimpleM[i], npens);
+    }
+    this->SimpleTestResult /= double(this->SimpleChecks);
+    return true;
 }
 
 bool SignChecker::DTWCheckForSimpleForge(DPoints *dpens, SPoints *spens, int npens)
 {
-	this->DTWTestResult = 0.0;
-	if (dpens == nullptr || spens == nullptr || npens < 2)
-		return false;
+    this->DTWTestResult = 0.0;
+    if (dpens == nullptr || spens == nullptr || npens < 2)
+        return false;
 
-	for (int i = 0; i < npens; ++i)
-		if (spens[i].GetN() == 0)
-			return false;
+    for (int i = 0; i < npens; ++i)
+        if (spens[i].GetN() == 0)
+            return false;
 
-	for (int i = 0; i < this->DTWChecks; i++)
-	{
-		this->DTWch[i].Init(npens, npens);
-		this->CGch[i].Init(npens, npens);
-		this->CVch[i].Init(npens, npens);
-		this->Ncg[i].Init(npens, npens);
-		this->GenerateMatrixByDPen(i, dpens, spens, npens);
-		this->DTW[i].Init(this->DTWch[i], 1, 1);
-		this->CG[i].Init(this->CGch[i], 1, 1);
+    std::vector<double> rawScores(static_cast<std::size_t>(DTWChecks), 0.0);
+    for (int i = 0; i < this->DTWChecks; i++)
+    {
+        this->DTWch[i].Init(npens, npens);
+        this->CGch[i].Init(npens, npens);
+        this->CVch[i].Init(npens, npens);
+        this->Ncg[i].Init(npens, npens);
+        this->GenerateMatrixByDPen(i, dpens, spens, npens);
+        this->DTW[i].Init(this->DTWch[i], 1, 1);
+        this->CG[i].Init(this->CGch[i], 1, 1);
 
-		this->DTWTestResult += 1 - this->DTWCalcDifference(i, npens);
-	}
-	this->DTWTestResult /= double(this->DTWChecks);
-	return true;
+        rawScores[static_cast<std::size_t>(i)] = 1.0 - this->DTWCalcDifference(i, npens);
+    }
+
+    if (config_.auto_weight_channels && DTWChecks > 1 && npens >= 3)
+    {
+        std::vector<double> weights(static_cast<std::size_t>(DTWChecks), 0.0);
+        double weightSum = 0.0;
+        for (int c = 0; c < DTWChecks; ++c)
+        {
+            double mean = 0.0;
+            int pairs = 0;
+            for (int i = 1; i < npens - 1; ++i)
+                for (int j = 0; j < i; ++j)
+                {
+                    mean += this->DTWch[c](i, j);
+                    ++pairs;
+                }
+            if (pairs == 0)
+            {
+                weights[static_cast<std::size_t>(c)] = 1.0;
+                weightSum += 1.0;
+                continue;
+            }
+            mean /= static_cast<double>(pairs);
+            double var = 0.0;
+            for (int i = 1; i < npens - 1; ++i)
+                for (int j = 0; j < i; ++j)
+                {
+                    const double d = this->DTWch[c](i, j) - mean;
+                    var += d * d;
+                }
+            var /= static_cast<double>(pairs);
+            const double w = 1.0 / std::max(var, Eps);
+            weights[static_cast<std::size_t>(c)] = w;
+            weightSum += w;
+        }
+        if (weightSum > Eps)
+            for (auto& w : weights)
+                w /= weightSum;
+        ChannelWeights = weights;
+    }
+    else
+    {
+        ChannelWeights.assign(static_cast<std::size_t>(DTWChecks),
+                              1.0 / static_cast<double>(DTWChecks));
+    }
+
+    for (int i = 0; i < DTWChecks; ++i)
+        this->DTWTestResult += ChannelWeights[static_cast<std::size_t>(i)] * rawScores[static_cast<std::size_t>(i)];
+
+    return true;
 }
 
-double SignChecker::CalcDifference( Matrix<double>& ratioM_withCheckedSign, Matrix<double>& ratioM_withoutCheckedSign, int npens)
+bool SignChecker::ShapeCheckFromDPoints(DPoints* dpens, SPoints* spens, int npens)
 {
-	if (npens < 2)
-		return 1.0;
+    this->ShapeTestResult = 0.0;
+    if (dpens == nullptr || spens == nullptr || npens < 2)
+        return false;
 
-	const double checkedRms = RowRmsPrefix(ratioM_withCheckedSign, npens - 1, npens - 1);
+    std::vector<ShapeFeatures> features;
+    features.reserve(static_cast<std::size_t>(npens));
+    for (int i = 0; i < npens; ++i)
+        features.push_back(ComputeShape(dpens[i], spens[i], config_));
 
-	if (npens < 3)
-	{
-		if (checkedRms > 1)
-			return 1.0 - (1.0 / checkedRms);
-		return checkedRms;
-	}
+    auto fillMatrix = [&](int icheck, double ShapeFeatures::*field)
+    {
+        this->ShapeMch[icheck].Init(npens, npens);
+        for (int i = 0; i < npens; ++i)
+            for (int j = 0; j < i; ++j)
+            {
+                const double diff = std::abs(features[static_cast<std::size_t>(i)].*field
+                                             - features[static_cast<std::size_t>(j)].*field);
+                this->ShapeMch[icheck].SetElem(i, j, diff);
+                this->ShapeMch[icheck].SetElem(j, i, diff);
+            }
+        this->ShapeM[icheck].Init(this->ShapeMch[icheck], 1, 1);
+    };
 
-	const double referenceRms = PairwiseRms(ratioM_withoutCheckedSign, ratioM_withoutCheckedSign.GetN());
-	return RelativeDifference(checkedRms, referenceRms);
+    fillMatrix(0, &ShapeFeatures::path_over_diag);
+    fillMatrix(1, &ShapeFeatures::aspect);
+    fillMatrix(2, &ShapeFeatures::curvature_mean);
+
+    for (int i = 0; i < ShapeChecks; ++i)
+        this->ShapeTestResult += 1.0 - CalcDifference(this->ShapeMch[i], this->ShapeM[i], npens);
+    this->ShapeTestResult /= static_cast<double>(ShapeChecks);
+    return true;
+}
+
+double SignChecker::CalcDifference(Matrix<double>& ratioM_withCheckedSign,
+                                   Matrix<double>& ratioM_withoutCheckedSign,
+                                   int npens)
+{
+    if (npens < 2)
+        return 1.0;
+
+    const double checkedRms = config_.trim_outliers
+        ? RowMedianPrefix(ratioM_withCheckedSign, npens - 1, npens - 1)
+        : RowRmsPrefix(ratioM_withCheckedSign, npens - 1, npens - 1);
+
+    if (npens < 3)
+    {
+        if (checkedRms > 1)
+            return 1.0 - (1.0 / checkedRms);
+        return checkedRms;
+    }
+
+    const double referenceRms = config_.trim_outliers
+        ? PairwiseMedian(ratioM_withoutCheckedSign, ratioM_withoutCheckedSign.GetN())
+        : PairwiseRms(ratioM_withoutCheckedSign, ratioM_withoutCheckedSign.GetN());
+    return RelativeDifference(checkedRms, referenceRms);
 }
 
 double SignChecker::DTWCalcDifference(int icheck, int npens)
 {
-	if (npens <= 0)
-		return 1.0;
+    if (npens <= 0)
+        return 1.0;
 
-	int jCVcheckmax = this->CVch[icheck].GetJMaxElInI(npens - 1);
-	jCVcheckmax = std::min(jCVcheckmax, this->DTW[icheck].GetN() - 1);
+    int jCVcheckmax = this->CVch[icheck].GetJMaxElInI(npens - 1);
+    jCVcheckmax = std::min(jCVcheckmax, this->DTW[icheck].GetN() - 1);
 
-	double DTWavg = this->DTW[icheck].AvgByI(jCVcheckmax);
-	double sigma = std::sqrt(this->DTW[icheck].SumSqByI(jCVcheckmax, DTWavg));
-	double sigmacheck = std::abs(this->DTWch[icheck](npens - 1, jCVcheckmax) - DTWavg);
-	double ratval = RelativeDifference(sigma, sigmacheck);
+    double DTWavg = this->DTW[icheck].AvgByI(jCVcheckmax);
+    double sigma = std::sqrt(this->DTW[icheck].SumSqByI(jCVcheckmax, DTWavg));
+    double sigmacheck = std::abs(this->DTWch[icheck](npens - 1, jCVcheckmax) - DTWavg);
 
-	double CGavg = this->CG[icheck].AvgByI(jCVcheckmax);
-	sigma = std::sqrt(this->CG[icheck].SumSqByI(jCVcheckmax, CGavg));
-	sigmacheck = std::abs(this->CGch[icheck](npens - 1, jCVcheckmax) - CGavg);
-	ratval += RelativeDifference(sigma, sigmacheck);
+    auto fold = [&](double s, double sc)
+    {
+        if (config_.zscore_scoring)
+        {
+            const double sc2 = sc * sc;
+            const double s2 = s * s;
+            const double denom = sc2 + s2;
+            return denom <= Eps ? 0.0 : sc2 / denom;
+        }
+        return RelativeDifference(s, sc);
+    };
 
-	return ratval/2.0;
+    double ratval = fold(sigma, sigmacheck);
+
+    double CGavg = this->CG[icheck].AvgByI(jCVcheckmax);
+    sigma = std::sqrt(this->CG[icheck].SumSqByI(jCVcheckmax, CGavg));
+    sigmacheck = std::abs(this->CGch[icheck](npens - 1, jCVcheckmax) - CGavg);
+    ratval += fold(sigma, sigmacheck);
+
+    return ratval / 2.0;
 }
 
 void SignChecker::GenerateMatrixByDPen(int icheck, DPoints* dpens, SPoints *spens, int npens)
 {
-	for (int i = 0; i < npens; i++)
-		for (int j = 0; j < i; j++)
-			this->DTW_Go(icheck, dpens, spens, i, j);
+    for (int i = 0; i < npens; i++)
+        for (int j = 0; j < i; j++)
+            this->DTW_Go(icheck, dpens, spens, i, j);
 }
 
 void SignChecker::DTW_Go(int icheck, DPoints* dpens, SPoints *spens, int i, int j)
 {
-	int Ni, Nj, Nt;
-	Ni = spens[i].GetN();
-	Nj = spens[j].GetN();
-	if (Ni == 0 || Nj == 0)
-		return;
+    if (spens[i].GetN() == 0 || spens[j].GetN() == 0)
+        return;
 
-	Matrix<double> D(Ni, Nj);
-	SPoints TPeni, TPenj;
+    const SampledPen left = BuildSampledPen(dpens[i], spens[i], config_);
+    const SampledPen right = BuildSampledPen(dpens[j], spens[j], config_);
+    const int Ni = static_cast<int>(left.x.size());
+    const int Nj = static_cast<int>(right.x.size());
+    if (Ni == 0 || Nj == 0)
+        return;
 
-	if (this->DTW_InitMatrix(icheck, D, dpens[i], spens[i], dpens[j], spens[j]))
-	{
-		this->DTW_TraceBack(D, TPeni, TPenj);
-		Nt = TPeni.GetN();
-		const int pathLength = std::max(Nt, 1);
-		const double normalizedCost = D(Ni - 1, Nj - 1) / static_cast<double>(pathLength);
+    Matrix<double> D(Ni, Nj);
+    using DC = SignCheckerConfig::DtwChannel;
+    const DC channel = config_.dtw_channels[static_cast<std::size_t>(icheck)];
+    const int window = std::max(1, this->DTWwindow);
+    const int band = config_.sakoe_chiba_band;
 
-		this->DTWch[icheck].SetElem(i, j, normalizedCost);
-		this->DTWch[icheck].SetElem(j, i, normalizedCost);
-		this->Ncg[icheck].SetElem(i, j, Nt);
-		this->Ncg[icheck].SetElem(j, i, Nt);
+    for (int ii = 0; ii < Ni; ii++)
+    {
+        for (int jj = 0; jj < Nj; jj++)
+        {
+            if (OutsideSakoeChiba(ii, jj, Ni, Nj, band))
+            {
+                D.SetElem(ii, jj, std::numeric_limits<double>::infinity());
+                continue;
+            }
 
-		const double globalDeformation = this->DTW_CaclGlobalDeformation(D, TPeni, TPenj) / double(pathLength);
-		this->CGch[icheck].SetElem(i, j, globalDeformation);
-		this->CGch[icheck].SetElem(j, i, globalDeformation);
+            double bestPrevious = std::numeric_limits<double>::infinity();
+            for (int k = 1; k <= window; k++)
+            {
+                const int ik = std::max(ii - k, 0);
+                const int jk = std::max(jj - k, 0);
 
-		const double determination = this->DTW_CalcDetermination(TPeni, dpens[i], TPenj, dpens[j]);
-		this->CVch[icheck].SetElem(i, j, determination);
-		this->CVch[icheck].SetElem(j, i, determination);
-	}
+                if (ik != ii || jk != jj)
+                    bestPrevious = std::min(bestPrevious, D(ik, jk));
+                if (ik != ii)
+                    bestPrevious = std::min(bestPrevious, D(ik, jj));
+                if (jk != jj)
+                    bestPrevious = std::min(bestPrevious, D(ii, jk));
+            }
+
+            if (ii == 0 && jj == 0)
+                bestPrevious = 0.0;
+
+            D.SetElem(ii, jj, LocalDTWCost(channel, left, ii, right, jj) + bestPrevious);
+        }
+    }
+
+    SPoints TPeni;
+    SPoints TPenj;
+    this->DTW_TraceBack(D, TPeni, TPenj);
+    const int Nt = TPeni.GetN();
+    const int pathLength = std::max(Nt, 1);
+    double finalCost = D(Ni - 1, Nj - 1);
+    if (!std::isfinite(finalCost))
+        finalCost = 0.0;
+    const double normalizedCost = finalCost / static_cast<double>(pathLength);
+
+    this->DTWch[icheck].SetElem(i, j, normalizedCost);
+    this->DTWch[icheck].SetElem(j, i, normalizedCost);
+    this->Ncg[icheck].SetElem(i, j, Nt);
+    this->Ncg[icheck].SetElem(j, i, Nt);
+
+    const double globalDeformation = this->DTW_CaclGlobalDeformation(D, TPeni, TPenj) / static_cast<double>(pathLength);
+    this->CGch[icheck].SetElem(i, j, globalDeformation);
+    this->CGch[icheck].SetElem(j, i, globalDeformation);
+
+    DPoints leftSynth;
+    DPoints rightSynth;
+    for (int k = 0; k < Ni; ++k)
+        leftSynth.PushElem(left.x[static_cast<std::size_t>(k)], left.y[static_cast<std::size_t>(k)]);
+    for (int k = 0; k < Nj; ++k)
+        rightSynth.PushElem(right.x[static_cast<std::size_t>(k)], right.y[static_cast<std::size_t>(k)]);
+    const double determination = this->DTW_CalcDetermination(TPeni, leftSynth, TPenj, rightSynth);
+    this->CVch[icheck].SetElem(i, j, determination);
+    this->CVch[icheck].SetElem(j, i, determination);
 }
 
 bool SignChecker::DTW_InitMatrix(int icheck, Matrix<double>& D, DPoints& dpeni, SPoints& speni, DPoints& dpenj, SPoints& spenj)
 {
-	const int Ni = speni.GetN();
-	const int Nj = spenj.GetN();
-	if (Ni == 0 || Nj == 0 || D.GetN() != Ni || D.GetM() != Nj)
-		return false;
+    const SampledPen left = BuildSampledPen(dpeni, speni, config_);
+    const SampledPen right = BuildSampledPen(dpenj, spenj, config_);
+    const int Ni = static_cast<int>(left.x.size());
+    const int Nj = static_cast<int>(right.x.size());
+    if (Ni == 0 || Nj == 0 || D.GetN() != Ni || D.GetM() != Nj)
+        return false;
 
-	const SampledPen left = BuildNormalizedSample(dpeni, speni);
-	const SampledPen right = BuildNormalizedSample(dpenj, spenj);
-	const int window = std::max(1, this->DTWwindow);
+    using DC = SignCheckerConfig::DtwChannel;
+    if (icheck < 0 || icheck >= static_cast<int>(config_.dtw_channels.size()))
+        return false;
+    const DC channel = config_.dtw_channels[static_cast<std::size_t>(icheck)];
+    const int window = std::max(1, this->DTWwindow);
+    const int band = config_.sakoe_chiba_band;
 
-	for (int i = 0; i < Ni; i++)
-	{
-		for (int j = 0; j < Nj; j++)
-		{
-			double bestPrevious = std::numeric_limits<double>::infinity();
-			for (int k = 1; k <= window; k++)
-			{
-				const int ik = std::max(i - k, 0);
-				const int jk = std::max(j - k, 0);
+    for (int i = 0; i < Ni; i++)
+    {
+        for (int j = 0; j < Nj; j++)
+        {
+            if (OutsideSakoeChiba(i, j, Ni, Nj, band))
+            {
+                D.SetElem(i, j, std::numeric_limits<double>::infinity());
+                continue;
+            }
 
-				if (ik != i || jk != j)
-					bestPrevious = std::min(bestPrevious, D(ik, jk));
-				if (ik != i)
-					bestPrevious = std::min(bestPrevious, D(ik, j));
-				if (jk != j)
-					bestPrevious = std::min(bestPrevious, D(i, jk));
-			}
+            double bestPrevious = std::numeric_limits<double>::infinity();
+            for (int k = 1; k <= window; k++)
+            {
+                const int ik = std::max(i - k, 0);
+                const int jk = std::max(j - k, 0);
 
-			if (i == 0 && j == 0)
-				bestPrevious = 0.0;
+                if (ik != i || jk != j)
+                    bestPrevious = std::min(bestPrevious, D(ik, jk));
+                if (ik != i)
+                    bestPrevious = std::min(bestPrevious, D(ik, j));
+                if (jk != j)
+                    bestPrevious = std::min(bestPrevious, D(i, jk));
+            }
 
-			D.SetElem(i, j, LocalDTWCost(icheck, left, i, right, j) + bestPrevious);
-		}
-	}
-	return true;
+            if (i == 0 && j == 0)
+                bestPrevious = 0.0;
+
+            D.SetElem(i, j, LocalDTWCost(channel, left, i, right, j) + bestPrevious);
+        }
+    }
+    return true;
 }
 
 void SignChecker::DTW_TraceBack(Matrix<double>& D, SPoints& tranformpeni, SPoints& tranformpenj)
 {
-	const int Ni = D.GetN();
-	const int Nj = D.GetM();
-	if (Ni == 0 || Nj == 0)
-		return;
+    const int Ni = D.GetN();
+    const int Nj = D.GetM();
+    if (Ni == 0 || Nj == 0)
+        return;
 
-	int i = Ni - 1;
-	int j = Nj - 1;
-	const int window = std::max(1, this->DTWwindow);
-	tranformpeni.PushElem(i);
-	tranformpenj.PushElem(j);
+    int i = Ni - 1;
+    int j = Nj - 1;
+    const int window = std::max(1, this->DTWwindow);
+    tranformpeni.PushElem(i);
+    tranformpenj.PushElem(j);
 
-	while (i != 0 || j != 0)
-	{
-		double minDij = std::numeric_limits<double>::infinity();
-		int mini = i;
-		int minj = j;
+    while (i != 0 || j != 0)
+    {
+        double minDij = std::numeric_limits<double>::infinity();
+        int mini = i;
+        int minj = j;
 
-		const auto tryCandidate = [&](int candidateI, int candidateJ)
-		{
-			if (candidateI == i && candidateJ == j)
-				return;
+        const auto tryCandidate = [&](int candidateI, int candidateJ)
+        {
+            if (candidateI == i && candidateJ == j)
+                return;
 
-			const double value = D(candidateI, candidateJ);
-			if (value < minDij)
-			{
-				minDij = value;
-				mini = candidateI;
-				minj = candidateJ;
-			}
-		};
+            const double value = D(candidateI, candidateJ);
+            if (value < minDij)
+            {
+                minDij = value;
+                mini = candidateI;
+                minj = candidateJ;
+            }
+        };
 
-		for (int k = 1; k <= window; k++)
-		{
-			const int ik = std::max(i - k, 0);
-			const int jk = std::max(j - k, 0);
+        for (int k = 1; k <= window; k++)
+        {
+            const int ik = std::max(i - k, 0);
+            const int jk = std::max(j - k, 0);
 
-			tryCandidate(ik, jk);
-			tryCandidate(ik, j);
-			tryCandidate(i, jk);
-		}
+            tryCandidate(ik, jk);
+            tryCandidate(ik, j);
+            tryCandidate(i, jk);
+        }
 
-		if (mini == i && minj == j)
-			break;
+        if (mini == i && minj == j)
+            break;
 
-		i = mini;
-		j = minj;
-		tranformpeni.PushElem(i);
-		tranformpenj.PushElem(j);
-	}
+        i = mini;
+        j = minj;
+        tranformpeni.PushElem(i);
+        tranformpenj.PushElem(j);
+    }
 }
 
 double SignChecker::DTW_CaclGlobalDeformation(Matrix<double>& D, SPoints& tranformpeni, SPoints& tranformpenj)
 {
-	int Nk = tranformpeni.GetN();
-	double CG = 0;
+    int Nk = tranformpeni.GetN();
+    double CG = 0;
 
-	for (int i = 1; i < Nk; i++)
-		CG += std::abs(D(tranformpeni[i - 1], tranformpenj[i - 1]) - D(tranformpeni[i], tranformpenj[i]));
+    for (int i = 1; i < Nk; i++)
+        CG += std::abs(D(tranformpeni[i - 1], tranformpenj[i - 1]) - D(tranformpeni[i], tranformpenj[i]));
 
-	return CG;
+    return CG;
 }
 
 double SignChecker::DTW_CalcDetermination(SPoints& tpeni, DPoints& dpeni, SPoints& tpenj, DPoints& dpenj)
 {
-	int N = tpeni.GetN();
-	if (N == 0 || tpenj.GetN() != N)
-		return 0.0;
+    int N = tpeni.GetN();
+    if (N == 0 || tpenj.GetN() != N)
+        return 0.0;
 
-	double xci, yci, xcj, ycj;
-	xci = tpeni.AvgDX(dpeni);
-	yci = tpeni.AvgDY(dpeni);
-	xcj = tpenj.AvgDX(dpenj);
-	ycj = tpenj.AvgDY(dpenj);
+    double xci, yci, xcj, ycj;
+    xci = tpeni.AvgDX(dpeni);
+    yci = tpeni.AvgDY(dpeni);
+    xcj = tpenj.AvgDX(dpenj);
+    ycj = tpenj.AvgDY(dpenj);
 
-	double xi, yi, xj, yj;
-	double sumi = 0;
-	double sumj = 0;
-	double sumsqx = 0;
-	double sumsqy = 0;
+    double xi, yi, xj, yj;
+    double sumi = 0;
+    double sumj = 0;
+    double sumsqx = 0;
+    double sumsqy = 0;
 
-	for (int i = 0; i < N; i++)
-	{
-		xi = dpeni.GetX(tpeni[i]);
-		yi = dpeni.GetY(tpeni[i]);
-		xj = dpenj.GetX(tpenj[i]);
-		yj = dpenj.GetY(tpenj[i]);
-		sumi += MultDif(xi, yi, xci, yci);
-		sumj += MultDif(xj, yj, xcj, ycj);
-		sumsqx += SumSq(xi, xj, xci, xcj);
-		sumsqy += SumSq(yi, yj, yci, ycj);
-	}
-	if ((sumi + sumj) == 0)
-	{
-		sumi = Eps;
-		sumj = 0;
-	}
-	if (sumsqx == 0) sumsqx = Eps;
-	if (sumsqy == 0) sumsqy = Eps;
-	const double determination = (sumi + sumj)*(sumi + sumj) / (sumsqx*sumsqy);
-	return std::max(0.0, std::min(1.0, determination));
+    for (int i = 0; i < N; i++)
+    {
+        xi = dpeni.GetX(tpeni[i]);
+        yi = dpeni.GetY(tpeni[i]);
+        xj = dpenj.GetX(tpenj[i]);
+        yj = dpenj.GetY(tpenj[i]);
+        sumi += MultDif(xi, yi, xci, yci);
+        sumj += MultDif(xj, yj, xcj, ycj);
+        sumsqx += SumSq(xi, xj, xci, xcj);
+        sumsqy += SumSq(yi, yj, yci, ycj);
+    }
+    if ((sumi + sumj) == 0)
+    {
+        sumi = Eps;
+        sumj = 0;
+    }
+    if (sumsqx == 0) sumsqx = Eps;
+    if (sumsqy == 0) sumsqy = Eps;
+    const double determination = (sumi + sumj) * (sumi + sumj) / (sumsqx * sumsqy);
+    return std::max(0.0, std::min(1.0, determination));
 }

@@ -5,7 +5,6 @@
 #include <utility>
 #include <vector>
 
-extern double agree_param;
 extern double Eps;
 extern double balance;
 
@@ -17,41 +16,107 @@ struct CTab
     double ratio_touches = 0.0;
 };
 
+struct DPoint
+{
+    double x = 0.0;
+    double y = 0.0;
+    double pressure = 0.0;
+    double timestamp = 0.0;
+    bool   pen_down = true;
+    bool   has_pressure = false;
+    bool   has_timestamp = false;
+};
+
 class DPoints
 {
 public:
-    using Point = std::pair<double, double>;
+    using PairPoint = std::pair<double, double>;
 
     DPoints() = default;
-    DPoints(std::initializer_list<Point> points) : points_(points) {}
+
+    DPoints(std::initializer_list<PairPoint> points)
+    {
+        points_.reserve(points.size());
+        for (const auto& point : points)
+        {
+            DPoint dp;
+            dp.x = point.first;
+            dp.y = point.second;
+            points_.push_back(dp);
+        }
+    }
+
+    static DPoints FromExtended(std::initializer_list<DPoint> points)
+    {
+        DPoints result;
+        result.points_.assign(points.begin(), points.end());
+        return result;
+    }
 
     void PushElem(double x, double y)
     {
-        points_.emplace_back(x, y);
+        DPoint dp;
+        dp.x = x;
+        dp.y = y;
+        points_.push_back(dp);
     }
 
-    void AddPoint(double x, double y)
+    void AddPoint(double x, double y) { PushElem(x, y); }
+
+    void AddPoint(double x, double y, double pressure)
     {
-        PushElem(x, y);
+        DPoint dp;
+        dp.x = x;
+        dp.y = y;
+        dp.pressure = pressure;
+        dp.has_pressure = true;
+        points_.push_back(dp);
     }
 
-    int GetN() const
+    void AddPoint(double x, double y, double pressure, double timestamp, bool pen_down = true)
     {
-        return static_cast<int>(points_.size());
+        DPoint dp;
+        dp.x = x;
+        dp.y = y;
+        dp.pressure = pressure;
+        dp.has_pressure = true;
+        dp.timestamp = timestamp;
+        dp.has_timestamp = true;
+        dp.pen_down = pen_down;
+        points_.push_back(dp);
     }
 
-    double GetX(int i) const
+    void AddPoint(const DPoint& point) { points_.push_back(point); }
+
+    int GetN() const { return static_cast<int>(points_.size()); }
+
+    double GetX(int i) const { return points_.at(static_cast<std::size_t>(i)).x; }
+    double GetY(int i) const { return points_.at(static_cast<std::size_t>(i)).y; }
+    double GetPressure(int i) const { return points_.at(static_cast<std::size_t>(i)).pressure; }
+    double GetTimestamp(int i) const { return points_.at(static_cast<std::size_t>(i)).timestamp; }
+    bool   GetPenDown(int i) const { return points_.at(static_cast<std::size_t>(i)).pen_down; }
+    bool   HasPressure(int i) const { return points_.at(static_cast<std::size_t>(i)).has_pressure; }
+    bool   HasTimestamp(int i) const { return points_.at(static_cast<std::size_t>(i)).has_timestamp; }
+    const DPoint& GetPoint(int i) const { return points_.at(static_cast<std::size_t>(i)); }
+
+    bool AllHavePressure() const
     {
-        return points_.at(static_cast<std::size_t>(i)).first;
+        for (const auto& p : points_)
+            if (!p.has_pressure)
+                return false;
+        return !points_.empty();
     }
 
-    double GetY(int i) const
+    bool AllHaveTimestamp() const
     {
-        return points_.at(static_cast<std::size_t>(i)).second;
+        for (const auto& p : points_)
+            if (!p.has_timestamp)
+                return false;
+        return !points_.empty();
     }
 
 private:
-    std::vector<Point> points_;
+    std::vector<DPoint> points_;
 };
 
 class SPoints
