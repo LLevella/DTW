@@ -23,6 +23,15 @@ DPoints MakeShiftedScaledLine()
     return DPoints{{10.0, -3.0}, {12.0, -1.0}, {14.0, -3.0}};
 }
 
+DPoints MakePressureTimedLine(double pressureOffset = 0.0, double timeScale = 1.0)
+{
+    DPoints points;
+    points.AddPoint(0.0, 0.0, 0.4 + pressureOffset, 0.00 * timeScale, true);
+    points.AddPoint(1.0, 0.0, 0.6 + pressureOffset, 0.10 * timeScale, true);
+    points.AddPoint(2.0, 0.0, 0.5 + pressureOffset, 0.20 * timeScale, false);
+    return points;
+}
+
 DPoints MakeArc(int n, double phaseShift = 0.0, double scale = 1.0)
 {
     DPoints points;
@@ -200,6 +209,47 @@ void TestCustomChannelsViaConfig()
     assert(checker.GetDTWResult() > 0.99); // одинаковая кривизна и направления — должны совпадать
 }
 
+void TestPressureAndVelocityChannels()
+{
+    DPoints dpens[2] = {MakePressureTimedLine(), MakePressureTimedLine()};
+    SPoints spens[2] = {SPoints::FullRange(dpens[0].GetN()), SPoints::FullRange(dpens[1].GetN())};
+    SignChecker checker;
+    SignCheckerConfig cfg;
+    cfg.dtw_channels = {
+        SignCheckerConfig::DtwChannel::Pressure,
+        SignCheckerConfig::DtwChannel::Velocity,
+        SignCheckerConfig::DtwChannel::Pseudopressure,
+    };
+    checker.SetConfig(cfg);
+
+    Matrix<double> pressureCosts(3, 3);
+    assert(checker.DTW_InitMatrix(0, pressureCosts, dpens[0], spens[0], dpens[1], spens[1]));
+    ExpectNear(pressureCosts(2, 2), 0.0);
+
+    Matrix<double> velocityCosts(3, 3);
+    assert(checker.DTW_InitMatrix(1, velocityCosts, dpens[0], spens[0], dpens[1], spens[1]));
+    ExpectNear(velocityCosts(2, 2), 0.0);
+
+    Matrix<double> pseudoPressureCosts(3, 3);
+    assert(checker.DTW_InitMatrix(2, pseudoPressureCosts, dpens[0], spens[0], dpens[1], spens[1]));
+    ExpectNear(pseudoPressureCosts(2, 2), 0.0);
+}
+
+void TestEmptyDtwChannelsFallsBackToCityBlock()
+{
+    DPoints dpens[2] = {MakeLine(), MakeLine()};
+    SPoints spens[2] = {SPoints::FullRange(dpens[0].GetN()), SPoints::FullRange(dpens[1].GetN())};
+    SignChecker checker;
+    SignCheckerConfig cfg;
+    cfg.dtw_channels.clear();
+    checker.SetConfig(cfg);
+
+    balance = 0.0;
+    assert(checker.GetConfig().dtw_channels.size() == 1);
+    assert(checker.DTWCheckForSimpleForge(dpens, spens, 2));
+    ExpectNear(checker.GetDTWResult(), 1.0);
+}
+
 void TestSakoeChibaBandRejectsFarPaths()
 {
     DPoints dpens[2] = {MakeArc(16), MakeArc(16)};
@@ -300,6 +350,8 @@ int main()
     TestDTWNormalizesTranslationAndScale();
     TestExtendedDPointFieldsPreserved();
     TestCustomChannelsViaConfig();
+    TestPressureAndVelocityChannels();
+    TestEmptyDtwChannelsFallsBackToCityBlock();
     TestSakoeChibaBandRejectsFarPaths();
     TestArclengthResampleStableOnIdenticalSignatures();
     TestShapeCheckIdenticalGivesPerfectScore();

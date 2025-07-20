@@ -592,10 +592,11 @@ SignChecker::SignChecker()
 void SignChecker::SetConfig(const SignCheckerConfig& config)
 {
     config_ = config;
+    if (config_.dtw_channels.empty())
+        config_.dtw_channels = {SignCheckerConfig::DtwChannel::CityBlock};
+
     DTWwindow = std::max(1, config_.dtw_window);
     DTWChecks = static_cast<int>(config_.dtw_channels.size());
-    if (DTWChecks <= 0)
-        DTWChecks = 1; // защитимся от пустого списка каналов
 
     DTWch = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[DTWChecks]);
     DTW   = std::unique_ptr<Matrix<double>[]>(new Matrix<double>[DTWChecks]);
