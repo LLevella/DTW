@@ -27,6 +27,59 @@ struct SampledPen
     bool has_timestamp = false;
 };
 
+struct FeatureNeeds
+{
+    bool pressure = false;
+    bool timestamp = false;
+    bool tangent = false;
+    bool curvature = false;
+    bool seglen = false;
+    bool velocity = false;
+    bool pseudopressure = false;
+};
+
+FeatureNeeds DetermineFeatureNeeds(const SignCheckerConfig& cfg, bool includeShapeFeatures = false)
+{
+    FeatureNeeds needs;
+    using DC = SignCheckerConfig::DtwChannel;
+
+    for (const DC channel : cfg.dtw_channels)
+    {
+        switch (channel)
+        {
+        case DC::CityBlock:
+        case DC::Direction:
+            break;
+        case DC::SegmentLength:
+            needs.seglen = true;
+            break;
+        case DC::TangentAngle:
+            needs.tangent = true;
+            break;
+        case DC::Curvature:
+            needs.curvature = true;
+            break;
+        case DC::Pseudopressure:
+            needs.seglen = true;
+            needs.pseudopressure = true;
+            break;
+        case DC::Pressure:
+            needs.pressure = true;
+            break;
+        case DC::Velocity:
+            needs.timestamp = true;
+            needs.seglen = true;
+            needs.velocity = true;
+            break;
+        }
+    }
+
+    if (includeShapeFeatures)
+        needs.curvature = true;
+
+    return needs;
+}
+
 double RelativeDifference(double left, double right)
 {
     const double denominator = std::max(std::max(std::abs(left), std::abs(right)), Eps);
@@ -302,27 +355,36 @@ void CenterAndDiagScale(std::vector<double>& x, std::vector<double>& y)
     }
 }
 
-void ComputeDerivedFeatures(SampledPen& pen)
+void ComputeDerivedFeatures(SampledPen& pen, const FeatureNeeds& needs)
 {
     const std::size_t n = pen.x.size();
-    pen.tangent.assign(n, 0.0);
-    pen.curvature.assign(n, 0.0);
-    pen.seglen.assign(n, 0.0);
-    pen.velocity.assign(n, 0.0);
-    pen.pseudopressure.assign(n, 0.0);
+    const bool needsSeglen = needs.seglen || needs.velocity || needs.pseudopressure;
+    if (needs.tangent)
+        pen.tangent.assign(n, 0.0);
+    if (needs.curvature)
+        pen.curvature.assign(n, 0.0);
+    if (needsSeglen)
+        pen.seglen.assign(n, 0.0);
+    if (needs.velocity && pen.has_timestamp)
+        pen.velocity.assign(n, 0.0);
+    if (needs.pseudopressure)
+        pen.pseudopressure.assign(n, 0.0);
 
     if (n < 2)
         return;
 
-    for (std::size_t i = 1; i < n; ++i)
+    if (needsSeglen)
     {
-        const double dx = pen.x[i] - pen.x[i - 1];
-        const double dy = pen.y[i] - pen.y[i - 1];
-        pen.seglen[i] = std::sqrt(dx * dx + dy * dy);
+        for (std::size_t i = 1; i < n; ++i)
+        {
+            const double dx = pen.x[i] - pen.x[i - 1];
+            const double dy = pen.y[i] - pen.y[i - 1];
+            pen.seglen[i] = std::sqrt(dx * dx + dy * dy);
+        }
+        pen.seglen[0] = pen.seglen[1];
     }
-    pen.seglen[0] = pen.seglen[1];
 
-    if (pen.has_timestamp)
+    if (needs.velocity && pen.has_timestamp)
     {
         for (std::size_t i = 1; i < n; ++i)
         {
@@ -332,39 +394,48 @@ void ComputeDerivedFeatures(SampledPen& pen)
         pen.velocity[0] = pen.velocity[1];
     }
 
-    std::vector<double> seglenSorted(pen.seglen);
-    const double medSeg = Median(std::move(seglenSorted));
-    const double scale = std::max(medSeg, Eps);
-    for (std::size_t i = 0; i < n; ++i)
-        pen.pseudopressure[i] = scale / std::max(pen.seglen[i], Eps);
-
-    for (std::size_t i = 0; i < n; ++i)
+    if (needs.pseudopressure)
     {
-        const std::size_t prev = (i == 0) ? 0 : i - 1;
-        const std::size_t next = (i + 1 < n) ? i + 1 : i;
-        const double dx = pen.x[next] - pen.x[prev];
-        const double dy = pen.y[next] - pen.y[prev];
-        pen.tangent[i] = std::atan2(dy, dx);
+        std::vector<double> seglenSorted(pen.seglen);
+        const double medSeg = Median(std::move(seglenSorted));
+        const double scale = std::max(medSeg, Eps);
+        for (std::size_t i = 0; i < n; ++i)
+            pen.pseudopressure[i] = scale / std::max(pen.seglen[i], Eps);
     }
 
-    for (std::size_t i = 1; i + 1 < n; ++i)
+    if (needs.tangent)
     {
-        const double xp = pen.x[i + 1] - pen.x[i - 1];
-        const double yp = pen.y[i + 1] - pen.y[i - 1];
-        const double xpp = pen.x[i + 1] - 2.0 * pen.x[i] + pen.x[i - 1];
-        const double ypp = pen.y[i + 1] - 2.0 * pen.y[i] + pen.y[i - 1];
-        const double speedSq = xp * xp + yp * yp;
-        if (speedSq <= Eps)
+        for (std::size_t i = 0; i < n; ++i)
         {
-            pen.curvature[i] = 0.0;
-            continue;
+            const std::size_t prev = (i == 0) ? 0 : i - 1;
+            const std::size_t next = (i + 1 < n) ? i + 1 : i;
+            const double dx = pen.x[next] - pen.x[prev];
+            const double dy = pen.y[next] - pen.y[prev];
+            pen.tangent[i] = std::atan2(dy, dx);
         }
-        const double denom = speedSq * std::sqrt(speedSq);
-        pen.curvature[i] = (xp * ypp - yp * xpp) / denom;
+    }
+
+    if (needs.curvature)
+    {
+        for (std::size_t i = 1; i + 1 < n; ++i)
+        {
+            const double xp = pen.x[i + 1] - pen.x[i - 1];
+            const double yp = pen.y[i + 1] - pen.y[i - 1];
+            const double xpp = pen.x[i + 1] - 2.0 * pen.x[i] + pen.x[i - 1];
+            const double ypp = pen.y[i + 1] - 2.0 * pen.y[i] + pen.y[i - 1];
+            const double speedSq = xp * xp + yp * yp;
+            if (speedSq <= Eps)
+            {
+                pen.curvature[i] = 0.0;
+                continue;
+            }
+            const double denom = speedSq * std::sqrt(speedSq);
+            pen.curvature[i] = (xp * ypp - yp * xpp) / denom;
+        }
     }
 }
 
-SampledPen BuildSampledPen(DPoints& points, SPoints& samples, const SignCheckerConfig& cfg)
+SampledPen BuildSampledPen(DPoints& points, SPoints& samples, const SignCheckerConfig& cfg, const FeatureNeeds& needs)
 {
     SampledPen pen;
     const int count = samples.GetN();
@@ -381,20 +452,20 @@ SampledPen BuildSampledPen(DPoints& points, SPoints& samples, const SignCheckerC
         const int idx = samples[i];
         pen.x.push_back(points.GetX(idx));
         pen.y.push_back(points.GetY(idx));
-        if (!points.HasPressure(idx))
+        if (needs.pressure && !points.HasPressure(idx))
             hasP = false;
-        if (!points.HasTimestamp(idx))
+        if (needs.timestamp && !points.HasTimestamp(idx))
             hasT = false;
     }
-    pen.has_pressure = hasP;
-    pen.has_timestamp = hasT;
-    if (hasP)
+    pen.has_pressure = needs.pressure && hasP;
+    pen.has_timestamp = needs.timestamp && hasT;
+    if (pen.has_pressure)
     {
         pen.pressure.reserve(static_cast<std::size_t>(count));
         for (int i = 0; i < count; ++i)
             pen.pressure.push_back(points.GetPressure(samples[i]));
     }
-    if (hasT)
+    if (pen.has_timestamp)
     {
         pen.timestamp.reserve(static_cast<std::size_t>(count));
         for (int i = 0; i < count; ++i)
@@ -424,7 +495,7 @@ SampledPen BuildSampledPen(DPoints& points, SPoints& samples, const SignCheckerC
     else
         CenterAndDiagScale(pen.x, pen.y);
 
-    ComputeDerivedFeatures(pen);
+    ComputeDerivedFeatures(pen, needs);
     return pen;
 }
 
@@ -466,15 +537,23 @@ double LocalDTWCost(SignCheckerConfig::DtwChannel channel,
     }
 
     case DC::SegmentLength:
+        if (left.seglen.empty() || right.seglen.empty())
+            return 0.0;
         return std::abs(left.seglen[li] - right.seglen[lj]);
 
     case DC::TangentAngle:
+        if (left.tangent.empty() || right.tangent.empty())
+            return 0.0;
         return AngularDistance(left.tangent[li], right.tangent[lj]);
 
     case DC::Curvature:
+        if (left.curvature.empty() || right.curvature.empty())
+            return 0.0;
         return std::abs(left.curvature[li] - right.curvature[lj]);
 
     case DC::Pseudopressure:
+        if (left.pseudopressure.empty() || right.pseudopressure.empty())
+            return 0.0;
         return std::abs(left.pseudopressure[li] - right.pseudopressure[lj]);
 
     case DC::Pressure:
@@ -483,7 +562,7 @@ double LocalDTWCost(SignCheckerConfig::DtwChannel channel,
         return std::abs(left.pressure[li] - right.pressure[lj]);
 
     case DC::Velocity:
-        if (!left.has_timestamp || !right.has_timestamp)
+        if (!left.has_timestamp || !right.has_timestamp || left.velocity.empty() || right.velocity.empty())
             return 0.0;
         return std::abs(left.velocity[li] - right.velocity[lj]);
     }
@@ -543,7 +622,7 @@ ShapeFeatures ComputeShape(DPoints& points, SPoints& samples, const SignCheckerC
     features.path_over_diag = diag <= Eps ? 0.0 : pathLen / diag;
     features.aspect = w / h;
 
-    SampledPen sampled = BuildSampledPen(points, samples, cfg);
+    SampledPen sampled = BuildSampledPen(points, samples, cfg, DetermineFeatureNeeds(cfg, true));
     if (!sampled.curvature.empty())
     {
         double sum = 0.0;
@@ -829,8 +908,9 @@ void SignChecker::DTW_Go(int icheck, DPoints* dpens, SPoints *spens, int i, int 
     if (spens[i].GetN() == 0 || spens[j].GetN() == 0)
         return;
 
-    const SampledPen left = BuildSampledPen(dpens[i], spens[i], config_);
-    const SampledPen right = BuildSampledPen(dpens[j], spens[j], config_);
+    const FeatureNeeds needs = DetermineFeatureNeeds(config_);
+    const SampledPen left = BuildSampledPen(dpens[i], spens[i], config_, needs);
+    const SampledPen right = BuildSampledPen(dpens[j], spens[j], config_, needs);
     const int Ni = static_cast<int>(left.x.size());
     const int Nj = static_cast<int>(right.x.size());
     if (Ni == 0 || Nj == 0)
@@ -905,8 +985,9 @@ void SignChecker::DTW_Go(int icheck, DPoints* dpens, SPoints *spens, int i, int 
 
 bool SignChecker::DTW_InitMatrix(int icheck, Matrix<double>& D, DPoints& dpeni, SPoints& speni, DPoints& dpenj, SPoints& spenj)
 {
-    const SampledPen left = BuildSampledPen(dpeni, speni, config_);
-    const SampledPen right = BuildSampledPen(dpenj, spenj, config_);
+    const FeatureNeeds needs = DetermineFeatureNeeds(config_);
+    const SampledPen left = BuildSampledPen(dpeni, speni, config_, needs);
+    const SampledPen right = BuildSampledPen(dpenj, spenj, config_, needs);
     const int Ni = static_cast<int>(left.x.size());
     const int Nj = static_cast<int>(right.x.size());
     if (Ni == 0 || Nj == 0 || D.GetN() != Ni || D.GetM() != Nj)
