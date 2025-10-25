@@ -577,6 +577,216 @@ bool OutsideSakoeChiba(int i, int j, int Ni, int Nj, int band)
     return std::abs(iScaled - static_cast<double>(j)) > static_cast<double>(band);
 }
 
+bool FillDTWMatrix(Matrix<double>& D,
+                   SignCheckerConfig::DtwChannel channel,
+                   const SampledPen& left,
+                   const SampledPen& right,
+                   int window,
+                   int band)
+{
+    const int Ni = static_cast<int>(left.x.size());
+    const int Nj = static_cast<int>(right.x.size());
+    if (Ni == 0 || Nj == 0 || D.GetN() != Ni || D.GetM() != Nj)
+        return false;
+
+    for (int i = 0; i < Ni; i++)
+    {
+        for (int j = 0; j < Nj; j++)
+        {
+            if (OutsideSakoeChiba(i, j, Ni, Nj, band))
+            {
+                D.SetElem(i, j, std::numeric_limits<double>::infinity());
+                continue;
+            }
+
+            double bestPrevious = std::numeric_limits<double>::infinity();
+            for (int k = 1; k <= window; k++)
+            {
+                const int ik = std::max(i - k, 0);
+                const int jk = std::max(j - k, 0);
+
+                if (ik != i || jk != j)
+                    bestPrevious = std::min(bestPrevious, D(ik, jk));
+                if (ik != i)
+                    bestPrevious = std::min(bestPrevious, D(ik, j));
+                if (jk != j)
+                    bestPrevious = std::min(bestPrevious, D(i, jk));
+            }
+
+            if (i == 0 && j == 0)
+                bestPrevious = 0.0;
+
+            D.SetElem(i, j, LocalDTWCost(channel, left, i, right, j) + bestPrevious);
+        }
+    }
+
+    return true;
+}
+
+void TraceBackMatrix(const Matrix<double>& D, int window, SPoints& transformedI, SPoints& transformedJ)
+{
+    const int Ni = D.GetN();
+    const int Nj = D.GetM();
+    if (Ni == 0 || Nj == 0)
+        return;
+
+    int i = Ni - 1;
+    int j = Nj - 1;
+    window = std::max(1, window);
+    transformedI.PushElem(i);
+    transformedJ.PushElem(j);
+
+    while (i != 0 || j != 0)
+    {
+        double minDij = std::numeric_limits<double>::infinity();
+        int mini = i;
+        int minj = j;
+
+        const auto tryCandidate = [&](int candidateI, int candidateJ)
+        {
+            if (candidateI == i && candidateJ == j)
+                return;
+
+            const double value = D(candidateI, candidateJ);
+            if (value < minDij)
+            {
+                minDij = value;
+                mini = candidateI;
+                minj = candidateJ;
+            }
+        };
+
+        for (int k = 1; k <= window; k++)
+        {
+            const int ik = std::max(i - k, 0);
+            const int jk = std::max(j - k, 0);
+
+            tryCandidate(ik, jk);
+            tryCandidate(ik, j);
+            tryCandidate(i, jk);
+        }
+
+        if (mini == i && minj == j)
+            break;
+
+        i = mini;
+        j = minj;
+        transformedI.PushElem(i);
+        transformedJ.PushElem(j);
+    }
+}
+
+double GlobalDeformation(const Matrix<double>& D, SPoints& transformedI, SPoints& transformedJ)
+{
+    const int count = transformedI.GetN();
+    double result = 0.0;
+    for (int i = 1; i < count; i++)
+        result += std::abs(D(transformedI[i - 1], transformedJ[i - 1]) - D(transformedI[i], transformedJ[i]));
+    return result;
+}
+
+double DeterminationFromSamples(SPoints& pathI, const SampledPen& left, SPoints& pathJ, const SampledPen& right)
+{
+    const int count = pathI.GetN();
+    if (count == 0 || pathJ.GetN() != count)
+        return 0.0;
+
+    double xci = 0.0;
+    double yci = 0.0;
+    double xcj = 0.0;
+    double ycj = 0.0;
+    for (int k = 0; k < count; ++k)
+    {
+        const std::size_t i = static_cast<std::size_t>(pathI[k]);
+        const std::size_t j = static_cast<std::size_t>(pathJ[k]);
+        xci += left.x[i];
+        yci += left.y[i];
+        xcj += right.x[j];
+        ycj += right.y[j];
+    }
+    xci /= static_cast<double>(count);
+    yci /= static_cast<double>(count);
+    xcj /= static_cast<double>(count);
+    ycj /= static_cast<double>(count);
+
+    double sumi = 0.0;
+    double sumj = 0.0;
+    double sumsqx = 0.0;
+    double sumsqy = 0.0;
+    for (int k = 0; k < count; ++k)
+    {
+        const std::size_t i = static_cast<std::size_t>(pathI[k]);
+        const std::size_t j = static_cast<std::size_t>(pathJ[k]);
+        const double xi = left.x[i];
+        const double yi = left.y[i];
+        const double xj = right.x[j];
+        const double yj = right.y[j];
+
+        sumi += (xi - xci) * (yi - yci);
+        sumj += (xj - xcj) * (yj - ycj);
+        sumsqx += (xi - xci) * (xi - xci) + (xj - xcj) * (xj - xcj);
+        sumsqy += (yi - yci) * (yi - yci) + (yj - ycj) * (yj - ycj);
+    }
+
+    if ((sumi + sumj) == 0)
+    {
+        sumi = Eps;
+        sumj = 0;
+    }
+    if (sumsqx == 0)
+        sumsqx = Eps;
+    if (sumsqy == 0)
+        sumsqy = Eps;
+
+    const double determination = (sumi + sumj) * (sumi + sumj) / (sumsqx * sumsqy);
+    return std::max(0.0, std::min(1.0, determination));
+}
+
+void StoreDTWPair(const SampledPen& left,
+                  const SampledPen& right,
+                  Matrix<double>& dtw,
+                  Matrix<double>& cg,
+                  Matrix<double>& cv,
+                  Matrix<int>& ncg,
+                  SignCheckerConfig::DtwChannel channel,
+                  int window,
+                  int band,
+                  int i,
+                  int j)
+{
+    const int Ni = static_cast<int>(left.x.size());
+    const int Nj = static_cast<int>(right.x.size());
+    if (Ni == 0 || Nj == 0)
+        return;
+
+    Matrix<double> D(Ni, Nj);
+    if (!FillDTWMatrix(D, channel, left, right, window, band))
+        return;
+
+    SPoints pathI;
+    SPoints pathJ;
+    TraceBackMatrix(D, window, pathI, pathJ);
+
+    const int pathLength = std::max(pathI.GetN(), 1);
+    double finalCost = D(Ni - 1, Nj - 1);
+    if (!std::isfinite(finalCost))
+        finalCost = 1.0;
+
+    const double normalizedCost = finalCost / static_cast<double>(pathLength);
+    dtw.SetElem(i, j, normalizedCost);
+    dtw.SetElem(j, i, normalizedCost);
+    ncg.SetElem(i, j, pathI.GetN());
+    ncg.SetElem(j, i, pathI.GetN());
+
+    const double globalDeformation = GlobalDeformation(D, pathI, pathJ) / static_cast<double>(pathLength);
+    cg.SetElem(i, j, globalDeformation);
+    cg.SetElem(j, i, globalDeformation);
+
+    const double determination = DeterminationFromSamples(pathI, left, pathJ, right);
+    cv.SetElem(i, j, determination);
+    cv.SetElem(j, i, determination);
+}
+
 struct ShapeFeatures
 {
     double path_over_diag = 0.0;
@@ -739,6 +949,12 @@ bool SignChecker::DTWCheckForSimpleForge(DPoints *dpens, SPoints *spens, int npe
         if (spens[i].GetN() == 0)
             return false;
 
+    const FeatureNeeds needs = DetermineFeatureNeeds(config_);
+    std::vector<SampledPen> preparedPens;
+    preparedPens.reserve(static_cast<std::size_t>(npens));
+    for (int i = 0; i < npens; ++i)
+        preparedPens.push_back(BuildSampledPen(dpens[i], spens[i], config_, needs));
+
     std::vector<double> rawScores(static_cast<std::size_t>(DTWChecks), 0.0);
     for (int i = 0; i < this->DTWChecks; i++)
     {
@@ -746,7 +962,24 @@ bool SignChecker::DTWCheckForSimpleForge(DPoints *dpens, SPoints *spens, int npe
         this->CGch[i].Init(npens, npens);
         this->CVch[i].Init(npens, npens);
         this->Ncg[i].Init(npens, npens);
-        this->GenerateMatrixByDPen(i, dpens, spens, npens);
+        const auto channel = config_.dtw_channels[static_cast<std::size_t>(i)];
+        for (int ipen = 0; ipen < npens; ipen++)
+        {
+            for (int jpen = 0; jpen < ipen; jpen++)
+            {
+                StoreDTWPair(preparedPens[static_cast<std::size_t>(ipen)],
+                             preparedPens[static_cast<std::size_t>(jpen)],
+                             this->DTWch[i],
+                             this->CGch[i],
+                             this->CVch[i],
+                             this->Ncg[i],
+                             channel,
+                             std::max(1, this->DTWwindow),
+                             config_.sakoe_chiba_band,
+                             ipen,
+                             jpen);
+            }
+        }
         this->DTW[i].Init(this->DTWch[i], 1, 1);
         this->CG[i].Init(this->CGch[i], 1, 1);
 
@@ -898,9 +1131,29 @@ double SignChecker::DTWCalcDifference(int icheck, int npens)
 
 void SignChecker::GenerateMatrixByDPen(int icheck, DPoints* dpens, SPoints *spens, int npens)
 {
+    if (icheck < 0 || icheck >= static_cast<int>(config_.dtw_channels.size()) || dpens == nullptr || spens == nullptr)
+        return;
+
+    const FeatureNeeds needs = DetermineFeatureNeeds(config_);
+    std::vector<SampledPen> preparedPens;
+    preparedPens.reserve(static_cast<std::size_t>(npens));
+    for (int i = 0; i < npens; ++i)
+        preparedPens.push_back(BuildSampledPen(dpens[i], spens[i], config_, needs));
+
+    const auto channel = config_.dtw_channels[static_cast<std::size_t>(icheck)];
     for (int i = 0; i < npens; i++)
         for (int j = 0; j < i; j++)
-            this->DTW_Go(icheck, dpens, spens, i, j);
+            StoreDTWPair(preparedPens[static_cast<std::size_t>(i)],
+                         preparedPens[static_cast<std::size_t>(j)],
+                         this->DTWch[icheck],
+                         this->CGch[icheck],
+                         this->CVch[icheck],
+                         this->Ncg[icheck],
+                         channel,
+                         std::max(1, this->DTWwindow),
+                         config_.sakoe_chiba_band,
+                         i,
+                         j);
 }
 
 void SignChecker::DTW_Go(int icheck, DPoints* dpens, SPoints *spens, int i, int j)
@@ -908,79 +1161,23 @@ void SignChecker::DTW_Go(int icheck, DPoints* dpens, SPoints *spens, int i, int 
     if (spens[i].GetN() == 0 || spens[j].GetN() == 0)
         return;
 
+    if (icheck < 0 || icheck >= static_cast<int>(config_.dtw_channels.size()))
+        return;
+
     const FeatureNeeds needs = DetermineFeatureNeeds(config_);
     const SampledPen left = BuildSampledPen(dpens[i], spens[i], config_, needs);
     const SampledPen right = BuildSampledPen(dpens[j], spens[j], config_, needs);
-    const int Ni = static_cast<int>(left.x.size());
-    const int Nj = static_cast<int>(right.x.size());
-    if (Ni == 0 || Nj == 0)
-        return;
-
-    Matrix<double> D(Ni, Nj);
-    using DC = SignCheckerConfig::DtwChannel;
-    const DC channel = config_.dtw_channels[static_cast<std::size_t>(icheck)];
-    const int window = std::max(1, this->DTWwindow);
-    const int band = config_.sakoe_chiba_band;
-
-    for (int ii = 0; ii < Ni; ii++)
-    {
-        for (int jj = 0; jj < Nj; jj++)
-        {
-            if (OutsideSakoeChiba(ii, jj, Ni, Nj, band))
-            {
-                D.SetElem(ii, jj, std::numeric_limits<double>::infinity());
-                continue;
-            }
-
-            double bestPrevious = std::numeric_limits<double>::infinity();
-            for (int k = 1; k <= window; k++)
-            {
-                const int ik = std::max(ii - k, 0);
-                const int jk = std::max(jj - k, 0);
-
-                if (ik != ii || jk != jj)
-                    bestPrevious = std::min(bestPrevious, D(ik, jk));
-                if (ik != ii)
-                    bestPrevious = std::min(bestPrevious, D(ik, jj));
-                if (jk != jj)
-                    bestPrevious = std::min(bestPrevious, D(ii, jk));
-            }
-
-            if (ii == 0 && jj == 0)
-                bestPrevious = 0.0;
-
-            D.SetElem(ii, jj, LocalDTWCost(channel, left, ii, right, jj) + bestPrevious);
-        }
-    }
-
-    SPoints TPeni;
-    SPoints TPenj;
-    this->DTW_TraceBack(D, TPeni, TPenj);
-    const int Nt = TPeni.GetN();
-    const int pathLength = std::max(Nt, 1);
-    double finalCost = D(Ni - 1, Nj - 1);
-    if (!std::isfinite(finalCost))
-        finalCost = 0.0;
-    const double normalizedCost = finalCost / static_cast<double>(pathLength);
-
-    this->DTWch[icheck].SetElem(i, j, normalizedCost);
-    this->DTWch[icheck].SetElem(j, i, normalizedCost);
-    this->Ncg[icheck].SetElem(i, j, Nt);
-    this->Ncg[icheck].SetElem(j, i, Nt);
-
-    const double globalDeformation = this->DTW_CaclGlobalDeformation(D, TPeni, TPenj) / static_cast<double>(pathLength);
-    this->CGch[icheck].SetElem(i, j, globalDeformation);
-    this->CGch[icheck].SetElem(j, i, globalDeformation);
-
-    DPoints leftSynth;
-    DPoints rightSynth;
-    for (int k = 0; k < Ni; ++k)
-        leftSynth.PushElem(left.x[static_cast<std::size_t>(k)], left.y[static_cast<std::size_t>(k)]);
-    for (int k = 0; k < Nj; ++k)
-        rightSynth.PushElem(right.x[static_cast<std::size_t>(k)], right.y[static_cast<std::size_t>(k)]);
-    const double determination = this->DTW_CalcDetermination(TPeni, leftSynth, TPenj, rightSynth);
-    this->CVch[icheck].SetElem(i, j, determination);
-    this->CVch[icheck].SetElem(j, i, determination);
+    StoreDTWPair(left,
+                 right,
+                 this->DTWch[icheck],
+                 this->CGch[icheck],
+                 this->CVch[icheck],
+                 this->Ncg[icheck],
+                 config_.dtw_channels[static_cast<std::size_t>(icheck)],
+                 std::max(1, this->DTWwindow),
+                 config_.sakoe_chiba_band,
+                 i,
+                 j);
 }
 
 bool SignChecker::DTW_InitMatrix(int icheck, Matrix<double>& D, DPoints& dpeni, SPoints& speni, DPoints& dpenj, SPoints& spenj)
@@ -997,104 +1194,17 @@ bool SignChecker::DTW_InitMatrix(int icheck, Matrix<double>& D, DPoints& dpeni, 
     if (icheck < 0 || icheck >= static_cast<int>(config_.dtw_channels.size()))
         return false;
     const DC channel = config_.dtw_channels[static_cast<std::size_t>(icheck)];
-    const int window = std::max(1, this->DTWwindow);
-    const int band = config_.sakoe_chiba_band;
-
-    for (int i = 0; i < Ni; i++)
-    {
-        for (int j = 0; j < Nj; j++)
-        {
-            if (OutsideSakoeChiba(i, j, Ni, Nj, band))
-            {
-                D.SetElem(i, j, std::numeric_limits<double>::infinity());
-                continue;
-            }
-
-            double bestPrevious = std::numeric_limits<double>::infinity();
-            for (int k = 1; k <= window; k++)
-            {
-                const int ik = std::max(i - k, 0);
-                const int jk = std::max(j - k, 0);
-
-                if (ik != i || jk != j)
-                    bestPrevious = std::min(bestPrevious, D(ik, jk));
-                if (ik != i)
-                    bestPrevious = std::min(bestPrevious, D(ik, j));
-                if (jk != j)
-                    bestPrevious = std::min(bestPrevious, D(i, jk));
-            }
-
-            if (i == 0 && j == 0)
-                bestPrevious = 0.0;
-
-            D.SetElem(i, j, LocalDTWCost(channel, left, i, right, j) + bestPrevious);
-        }
-    }
-    return true;
+    return FillDTWMatrix(D, channel, left, right, std::max(1, this->DTWwindow), config_.sakoe_chiba_band);
 }
 
 void SignChecker::DTW_TraceBack(Matrix<double>& D, SPoints& tranformpeni, SPoints& tranformpenj)
 {
-    const int Ni = D.GetN();
-    const int Nj = D.GetM();
-    if (Ni == 0 || Nj == 0)
-        return;
-
-    int i = Ni - 1;
-    int j = Nj - 1;
-    const int window = std::max(1, this->DTWwindow);
-    tranformpeni.PushElem(i);
-    tranformpenj.PushElem(j);
-
-    while (i != 0 || j != 0)
-    {
-        double minDij = std::numeric_limits<double>::infinity();
-        int mini = i;
-        int minj = j;
-
-        const auto tryCandidate = [&](int candidateI, int candidateJ)
-        {
-            if (candidateI == i && candidateJ == j)
-                return;
-
-            const double value = D(candidateI, candidateJ);
-            if (value < minDij)
-            {
-                minDij = value;
-                mini = candidateI;
-                minj = candidateJ;
-            }
-        };
-
-        for (int k = 1; k <= window; k++)
-        {
-            const int ik = std::max(i - k, 0);
-            const int jk = std::max(j - k, 0);
-
-            tryCandidate(ik, jk);
-            tryCandidate(ik, j);
-            tryCandidate(i, jk);
-        }
-
-        if (mini == i && minj == j)
-            break;
-
-        i = mini;
-        j = minj;
-        tranformpeni.PushElem(i);
-        tranformpenj.PushElem(j);
-    }
+    TraceBackMatrix(D, std::max(1, this->DTWwindow), tranformpeni, tranformpenj);
 }
 
 double SignChecker::DTW_CaclGlobalDeformation(Matrix<double>& D, SPoints& tranformpeni, SPoints& tranformpenj)
 {
-    int Nk = tranformpeni.GetN();
-    double CG = 0;
-
-    for (int i = 1; i < Nk; i++)
-        CG += std::abs(D(tranformpeni[i - 1], tranformpenj[i - 1]) - D(tranformpeni[i], tranformpenj[i]));
-
-    return CG;
+    return GlobalDeformation(D, tranformpeni, tranformpenj);
 }
 
 double SignChecker::DTW_CalcDetermination(SPoints& tpeni, DPoints& dpeni, SPoints& tpenj, DPoints& dpenj)
