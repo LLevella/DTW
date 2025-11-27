@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 #include <numeric>
 #include <vector>
@@ -92,11 +93,16 @@ double Median(std::vector<double> values)
 {
     if (values.empty())
         return 0.0;
-    std::sort(values.begin(), values.end());
+
     const std::size_t n = values.size();
+    const std::size_t mid = n / 2;
+    std::nth_element(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(mid), values.end());
     if (n % 2 == 1)
-        return values[n / 2];
-    return 0.5 * (values[n / 2 - 1] + values[n / 2]);
+        return values[mid];
+
+    const double upper = values[mid];
+    std::nth_element(values.begin(), values.begin() + static_cast<std::ptrdiff_t>(mid - 1), values.begin() + static_cast<std::ptrdiff_t>(mid));
+    return 0.5 * (values[mid - 1] + upper);
 }
 
 double RowRmsPrefix(const Matrix<double>& matrix, int row, int count)
@@ -155,20 +161,30 @@ void SmoothInplace(std::vector<double>& v, int window)
 {
     if (window <= 1 || v.size() < 2)
         return;
+
     const int half = window / 2;
     std::vector<double> out(v.size());
+    double sum = 0.0;
+    int begin = 0;
+    int end = 0;
+
     for (std::size_t i = 0; i < v.size(); ++i)
     {
-        double sum = 0.0;
-        int count = 0;
-        for (int k = -half; k <= half; ++k)
+        const int wantedBegin = std::max(0, static_cast<int>(i) - half);
+        const int wantedEnd = std::min(static_cast<int>(v.size()) - 1, static_cast<int>(i) + half);
+
+        while (begin < wantedBegin)
         {
-            const int j = static_cast<int>(i) + k;
-            if (j < 0 || j >= static_cast<int>(v.size()))
-                continue;
-            sum += v[static_cast<std::size_t>(j)];
-            ++count;
+            sum -= v[static_cast<std::size_t>(begin)];
+            ++begin;
         }
+        while (end <= wantedEnd)
+        {
+            sum += v[static_cast<std::size_t>(end)];
+            ++end;
+        }
+
+        const int count = end - begin;
         out[i] = count > 0 ? sum / static_cast<double>(count) : v[i];
     }
     v.swap(out);
