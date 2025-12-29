@@ -323,6 +323,56 @@ void TestZscoreScoringSimpleCase()
     ExpectNear(checker.GetDTWResult(), 1.0);
 }
 
+void TestSmoothingPcaAndZscoreKeepIdenticalSignatures()
+{
+    DPoints dpens[2] = {MakeArc(24), MakeArc(24)};
+    SPoints spens[2] = {SPoints::FullRange(24), SPoints::FullRange(24)};
+
+    SignChecker checker;
+    SignCheckerConfig cfg;
+    cfg.smooth = true;
+    cfg.smooth_window = 5;
+    cfg.pca_rotate = true;
+    cfg.zscore_normalize = true;
+    cfg.dtw_channels = {
+        SignCheckerConfig::DtwChannel::CityBlock,
+        SignCheckerConfig::DtwChannel::TangentAngle,
+        SignCheckerConfig::DtwChannel::Curvature,
+    };
+    checker.SetConfig(cfg);
+
+    balance = 0.0;
+    assert(checker.DTWCheckForSimpleForge(dpens, spens, 2));
+    ExpectNear(checker.GetDTWResult(), 1.0);
+}
+
+void TestTrimOutliersUsesMedianDistance()
+{
+    SignChecker checker;
+    SignCheckerConfig cfg;
+    cfg.trim_outliers = true;
+    checker.SetConfig(cfg);
+
+    Matrix<double> withChecked(4, 4);
+    Matrix<double> withoutChecked(3, 3);
+
+    withoutChecked.SetElem(1, 0, 2.0);
+    withoutChecked.SetElem(0, 1, 2.0);
+    withoutChecked.SetElem(2, 0, 2.0);
+    withoutChecked.SetElem(0, 2, 2.0);
+    withoutChecked.SetElem(2, 1, 100.0);
+    withoutChecked.SetElem(1, 2, 100.0);
+
+    withChecked.SetElem(3, 0, 2.0);
+    withChecked.SetElem(0, 3, 2.0);
+    withChecked.SetElem(3, 1, 2.0);
+    withChecked.SetElem(1, 3, 2.0);
+    withChecked.SetElem(3, 2, 2.0);
+    withChecked.SetElem(2, 3, 2.0);
+
+    ExpectNear(checker.CalcDifference(withChecked, withoutChecked, 4), 0.0);
+}
+
 void TestAutoWeightChannelsNormalizes()
 {
     DPoints dpens[3] = {MakeArc(12), MakeArc(12), MakeArc(12)};
@@ -357,5 +407,7 @@ int main()
     TestShapeCheckIdenticalGivesPerfectScore();
     TestShapeWeightContributesToTotal();
     TestZscoreScoringSimpleCase();
+    TestSmoothingPcaAndZscoreKeepIdenticalSignatures();
+    TestTrimOutliersUsesMedianDistance();
     TestAutoWeightChannelsNormalizes();
 }
