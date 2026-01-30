@@ -5,6 +5,8 @@ project(DTW VERSION 0.1.0 LANGUAGES CXX)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
+option(DTW_BUILD_BENCHMARKS "Build DTW benchmark utilities" OFF)
+
 add_library(dtw
     SignatureData.cpp
     SignChecker.cpp
@@ -25,6 +27,10 @@ endif()
 include(CTest)
 if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
     add_subdirectory(tests)
+endif()
+
+if(DTW_BUILD_BENCHMARKS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/CMakeLists.txt")
+    add_subdirectory(benchmarks)
 endif()
 
 install(TARGETS dtw
