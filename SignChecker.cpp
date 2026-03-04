@@ -758,7 +758,8 @@ double DeterminationFromSamples(SPoints& pathI, const SampledPen& left, SPoints&
     return std::max(0.0, std::min(1.0, determination));
 }
 
-void StoreDTWPair(const SampledPen& left,
+void StoreDTWPair(Matrix<double>& workspace,
+                  const SampledPen& left,
                   const SampledPen& right,
                   Matrix<double>& dtw,
                   Matrix<double>& cg,
@@ -775,16 +776,16 @@ void StoreDTWPair(const SampledPen& left,
     if (Ni == 0 || Nj == 0)
         return;
 
-    Matrix<double> D(Ni, Nj);
-    if (!FillDTWMatrix(D, channel, left, right, window, band))
+    workspace.Init(Ni, Nj);
+    if (!FillDTWMatrix(workspace, channel, left, right, window, band))
         return;
 
     SPoints pathI;
     SPoints pathJ;
-    TraceBackMatrix(D, window, pathI, pathJ);
+    TraceBackMatrix(workspace, window, pathI, pathJ);
 
     const int pathLength = std::max(pathI.GetN(), 1);
-    double finalCost = D(Ni - 1, Nj - 1);
+    double finalCost = workspace(Ni - 1, Nj - 1);
     if (!std::isfinite(finalCost))
         finalCost = 1.0;
 
@@ -794,7 +795,7 @@ void StoreDTWPair(const SampledPen& left,
     ncg.SetElem(i, j, pathI.GetN());
     ncg.SetElem(j, i, pathI.GetN());
 
-    const double globalDeformation = GlobalDeformation(D, pathI, pathJ) / static_cast<double>(pathLength);
+    const double globalDeformation = GlobalDeformation(workspace, pathI, pathJ) / static_cast<double>(pathLength);
     cg.SetElem(i, j, globalDeformation);
     cg.SetElem(j, i, globalDeformation);
 
@@ -979,11 +980,13 @@ bool SignChecker::DTWCheckForSimpleForge(DPoints *dpens, SPoints *spens, int npe
         this->CVch[i].Init(npens, npens);
         this->Ncg[i].Init(npens, npens);
         const auto channel = config_.dtw_channels[static_cast<std::size_t>(i)];
+        Matrix<double> workspace;
         for (int ipen = 0; ipen < npens; ipen++)
         {
             for (int jpen = 0; jpen < ipen; jpen++)
             {
-                StoreDTWPair(preparedPens[static_cast<std::size_t>(ipen)],
+                StoreDTWPair(workspace,
+                             preparedPens[static_cast<std::size_t>(ipen)],
                              preparedPens[static_cast<std::size_t>(jpen)],
                              this->DTWch[i],
                              this->CGch[i],
@@ -1157,9 +1160,11 @@ void SignChecker::GenerateMatrixByDPen(int icheck, DPoints* dpens, SPoints *spen
         preparedPens.push_back(BuildSampledPen(dpens[i], spens[i], config_, needs));
 
     const auto channel = config_.dtw_channels[static_cast<std::size_t>(icheck)];
+    Matrix<double> workspace;
     for (int i = 0; i < npens; i++)
         for (int j = 0; j < i; j++)
-            StoreDTWPair(preparedPens[static_cast<std::size_t>(i)],
+            StoreDTWPair(workspace,
+                         preparedPens[static_cast<std::size_t>(i)],
                          preparedPens[static_cast<std::size_t>(j)],
                          this->DTWch[icheck],
                          this->CGch[icheck],
@@ -1183,7 +1188,9 @@ void SignChecker::DTW_Go(int icheck, DPoints* dpens, SPoints *spens, int i, int 
     const FeatureNeeds needs = DetermineFeatureNeeds(config_);
     const SampledPen left = BuildSampledPen(dpens[i], spens[i], config_, needs);
     const SampledPen right = BuildSampledPen(dpens[j], spens[j], config_, needs);
-    StoreDTWPair(left,
+    Matrix<double> workspace;
+    StoreDTWPair(workspace,
+                 left,
                  right,
                  this->DTWch[icheck],
                  this->CGch[icheck],
