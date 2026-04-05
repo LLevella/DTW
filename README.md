@@ -205,6 +205,18 @@ Run:
 ctest --test-dir build --output-on-failure
 ```
 
+### Benchmarking
+
+Benchmark utilities are disabled by default and can be built explicitly:
+
+```bash
+cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release -DDTW_BUILD_BENCHMARKS=ON
+cmake --build build-bench --parallel
+./build-bench/benchmarks/dtw_benchmark
+```
+
+The benchmark compares the default DTW configuration with a fuller preprocessing/channel setup on a synthetic signature set. Use it as a relative signal when changing preprocessing, DTW memory layout, or channel scoring.
+
 ### CI/CD
 
 GitHub Actions runs on pull requests, pushes to `master`/`main`, manual dispatch, and tags matching `v*`.
@@ -421,6 +433,18 @@ points.AddPoint(2.0, 0.0, 0.50, 0.02, false);
 ```bash
 ctest --test-dir build --output-on-failure
 ```
+
+### Benchmarking
+
+Benchmark-утилиты выключены по умолчанию и собираются явно:
+
+```bash
+cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release -DDTW_BUILD_BENCHMARKS=ON
+cmake --build build-bench --parallel
+./build-bench/benchmarks/dtw_benchmark
+```
+
+Benchmark сравнивает дефолтную DTW-конфигурацию с более полным набором preprocessing/channel settings на синтетическом наборе подписей. Его удобно использовать как относительный сигнал при изменениях препроцессинга, памяти DTW или scoring каналов.
 
 ### CI/CD
 
