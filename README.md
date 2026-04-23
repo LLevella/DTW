@@ -229,10 +229,6 @@ CI jobs:
 
 Release artifacts contain the static library, headers, and CMake package config.
 
-### Notes
-
-The public `SignChecker` methods from the original project are still available. New behavior is opt-in through `SignCheckerConfig` unless it is a safe default, such as normalized DTW coordinates.
-
 ---
 
 ## Русский
@@ -457,7 +453,3 @@ CI jobs:
 - упаковка релизного артефакта для тегов `v*`.
 
 Релизный артефакт содержит статическую библиотеку, заголовки и CMake package config.
-
-### Примечания
-
-Публичные методы `SignChecker` из исходного проекта сохранены. Новое поведение включается через `SignCheckerConfig`, кроме безопасных дефолтов вроде нормализации координат в DTW.
